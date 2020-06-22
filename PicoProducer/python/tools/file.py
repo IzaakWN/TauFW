@@ -2,7 +2,8 @@
 import os, re, shutil
 from abc import ABCMeta, abstractmethod
 from subprocess import Popen, PIPE, STDOUT
-  
+from ROOT import TFile
+
 
 def writetemplate(templatename,outfilename,sublist=[],rmlist=[],**kwargs):
   """Write file from template."""
@@ -22,7 +23,8 @@ def writetemplate(templatename,outfilename,sublist=[],rmlist=[],**kwargs):
   
 
 def ensuredir(*dirnames,**kwargs):
-  """Make directory if it does not exist."""
+  """Make directory if it does not exist.
+  If more than one path is given, it is joined into one."""
   dirname   = os.path.join(*dirnames)
   empty     = kwargs.get('empty', False)
   verbosity = kwargs.get('verb',  0    )
@@ -43,7 +45,8 @@ def ensuredir(*dirnames,**kwargs):
   
 
 def ensurefile(*paths,**kwargs):
-  """Ensure file exists."""
+  """Ensure file exists.
+  If more than one path is given, it is joined into one."""
   fatal = kwargs.get('fatal',True)
   path = os.path.join(*paths)
   if not os.path.isfile(path):
@@ -62,3 +65,53 @@ def rmfile(filepaths):
     if os.path.isfile(filepath):
       os.unlink(filepath)
   
+
+def getline(fname,iline):
+  target = ""
+  with open(fname) as file:
+    for i, line in enumerate(file):
+      if i==iline:
+        target = line
+        break
+  return target
+  
+
+def ensureTFile(filename,option='READ'):
+  """Open TFile, checking if the file in the given path exists."""
+  if not os.path.isfile(filename):
+    raise IOError('File in path "%s" does not exist!'%(filename))
+    exit(1)
+  file = TFile(filename,option)
+  if not file or file.IsZombie():
+    raise IOError('Could not open file by name "%s"'%(filename))
+    exit(1)
+  return file
+  
+
+#def extractTH1(file,histname,setdir=True,close=None):
+#  """Get histogram from a given file."""
+#  if isinstance(file,str):
+#    file = ensuretfile(file)
+#    if close==None: close = True
+#  if not file or file.IsZombie():
+#    raise OSError('Could not open file!')
+#    exit(1)
+#  hist = file.Get(histname)
+#  if not hist:
+#    raise OSError('Did not find histogram "%s" in file %s!'%(histname,file.GetName()))
+#    exit(1)
+#  if (close or setdir) and isinstance(hist,TH1):
+#    hist.SetDirectory(0)
+#  if close:
+#    file.Close()
+#  return hist
+#  
+#
+#def ensureTFileAndTH1(filename,histname,verbose=True,setdir=True):
+#  """Open a TFile and get a histogram."""
+#  if verbose:
+#    print ">>>   %s"%(filename)
+#  file = ensuretfile(filename,'READ')
+#  hist = extractTH1(file,histname,setdir=setdir)
+#  return file, hist
+

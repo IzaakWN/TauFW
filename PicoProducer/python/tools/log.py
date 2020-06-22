@@ -6,11 +6,11 @@ tcol_dict = { 'black':  30,  'red':     31, 'green': 32,
               'grey':   90,  'none':     0 }
 bcol_dict = {k: (10+v if v else v) for k,v in tcol_dict.iteritems()}
 def color(string,c='green',b=False,**kwargs):
-  tcol_key   = kwargs.get('color',     c     )
-  bcol_key   = kwargs.get('background','none')
+  tcol_key   = kwargs.get('color',     c   )
+  bcol_key   = kwargs.get('background',None)
   bold_code  = "\033[1m" if kwargs.get('bold',b) else ""
-  tcol_code  = "\033[%dm"%tcol_dict[tcol_key] if tcol_key!='none' else ""
-  bcol_code  = "\033[%dm"%bcol_dict[bcol_key] if bcol_key!='none' else ""
+  tcol_code  = "\033[%dm"%tcol_dict[tcol_key] if tcol_key!=None else ""
+  bcol_code  = "\033[%dm"%bcol_dict[bcol_key] if bcol_key!=None else ""
   stop_code  = "\033[0m"
   reset_code = stop_code if kwargs.get('reset',False) else ""
   return kwargs.get('pre',"") + reset_code + bcol_code + bold_code + tcol_code + string + stop_code
@@ -28,27 +28,19 @@ def green(string,**kwargs):
   return "\033[32m%s\033[0m"%string
   
 
-def error(string,**kwargs):
-  print ">>> \033[1m\033[91m%sERROR! %s\033[0m"%(kwargs.get('pre',""),string)
-  
-
-def warning(string,**kwargs):
-  print ">>> \033[1m\033[93m%sWarning!\033[0m\033[93m %s\033[0m"%(kwargs.get('pre',""),string)
-  
-
 def bold(string):
   return "\033[1m%s\033[0m"%(string)
   
 
-_headeri = 0
+#_headeri = 0
 def header(*strings):
-  global _headeri
+  #global _headeri
   title  = ', '.join([str(s).lstrip('_') for s in strings if s])
-  string = ("\n\n" if _headeri>0 else "\n") +\
+  string = "\n" +\
            "   ###%s\n"    % ('#'*(len(title)+3)) +\
            "   #  %s  #\n" % (title) +\
            "   ###%s\n"    % ('#'*(len(title)+3))
-  _headeri += 1
+  #_headeri += 1
   return string
   
 
@@ -56,22 +48,24 @@ def header(*strings):
 class Logger(object):
   """Class to customly log program."""
   
-  def __init__(self, name="unnamed", verb=0, **kwargs):
+  def __init__(self, name="LOG", verb=0, **kwargs):
     self.name      = name
     self.verbosity = verb
-    self.pre       = ">>> "
+    self.pre       = kwargs.get('pre',">>> ")
     self._table    = None
+    if  kwargs.get('showname',False):
+      self.pre += self.name + ": "
   
   def getverb(self,*args):
-    """Set verbosity level of each module."""
-    verbosities = [ self.verbosity ]
+    """Decide verbosity level based on maximum of own verbosity and given arguments."""
+    verbs = [ self.verbosity ]
     for arg in args:
       if isinstance(arg,dict):
-        verbosity = arg.get('verb',0) or 0
+        verbosity = arg.get('verb',0) + arg.get('verbosity',0) + 0
       else:
-        verbosity = arg or 0
-      verbosities.append(verbosity)
-    return max(verbosities)
+        verbosity = int(bool(arg) or 0)
+      verbs.append(verbosity)
+    return max(verbs)
   
   def info(self,string,**kwargs):
     """Info"""
@@ -100,25 +94,35 @@ class Logger(object):
       exclam  = color(kwargs.get('exclam',"ERROR! "),'red',b=True,pre=self.pre+kwargs.get('pre',""))
       message = color(string,'red',pre="")
       print exclam+message
+    return trigger
   
-  def fatal(self,*args,**kwargs):
+  def fatal(self,string,trigger=True,**kwargs):
     """Fatal error by throwing an exception."""
-    self.error(*args,**kwargs)
-    raise Exception
+    return self.throw(Exception,string,trigger=trigger,**kwargs)
   
-  def throw(self,error,string,**kwargs):
-    """Fatal error by throwing an exception."""
-    string = color(string,'red',**kwargs)
-    raise error(string)
+  def throw(self,error,string,trigger=True,**kwargs):
+    """Fatal error by throwing a specified exception."""
+    if trigger:
+      string = color(string,'red',**kwargs)
+      raise error(string)
+    return trigger
   
-  def verbose(self,string,verb=None,level=None,**kwargs):
+  def insist(self,condition,string,error=AssertionError,**kwargs):
+    """Assert condition throwing an exception."""
+    return self.throw(error,string,trigger=(not condition),**kwargs)
+  
+  def verbose(self,string,verb=None,level=1,**kwargs):
     """Check verbosity and print if verbosity level is matched."""
     if verb==None:
       verb   = self.verbosity
-    if level==None:
-      level  = False
-      kwargs['pre'] = self.pre+kwargs.get('pre',"")
-      printVerbose(string,verbosity,level,**kwargs)
+    if verb>=level:
+      pre = self.pre+kwargs.get('pre',"")
+      print pre+string
+      return True
+    return False
+  
+  def verb(self,*args,**kwargs):
+    return self.verbose(*args,**kwargs)
   
   #def table(self,format,**kwargs):
   #  """Initiate new table."""
