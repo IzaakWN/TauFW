@@ -10,10 +10,27 @@ import os, re, json
 import importlib
 from copy import deepcopy
 from fnmatch import fnmatch
-from TauFW.PicoProducer.tools.utils import execute, repkey
-from TauFW.PicoProducer.tools.file import ensurefile
+from TauFW.common.tools.utils import execute, CalledProcessError, repkey
+from TauFW.common.tools.file import ensurefile
 from TauFW.PicoProducer.storage.utils import LOG, getstorage
 
+
+def dasgoclient(query,**kwargs):
+  """Help function to call dasgoclient."""
+  try:
+    verbosity = kwargs.get('verb', 0)
+    dascmd    = 'dasgoclient --query="%s"'%(query)
+    LOG.verb(repr(dascmd),verbosity)
+    cmdout    = execute(dascmd,verb=verbosity-1)
+  except CalledProcessError as e:
+    print
+    LOG.error("Failed to call 'dasgoclient' command. Please make sure:\n"
+              "  1) 'dasgoclient' command exists.\n"
+              "  2) You have a valid VOMS proxy. Use 'voms-proxy-init -voms cms -valid 200:0' or 'source utils/setupVOMS.sh'.\n"
+              "  3) The DAS dataset in '%s' exists!\n"%(dascmd))
+    raise e
+  return cmdout
+  
 
 class Sample(object):
   
@@ -26,11 +43,11 @@ class Sample(object):
     """
     
     # PATH
-    assert len(paths)>=1, "Need at least one path to create a sample..."
+    LOG.insist(len(paths)>=1,"Need at least one path to create a sample...")
     if len(paths)==1 and isinstance(paths[0],list):
       paths = paths[0]
     for path in paths:
-      assert path.count('/')>=3 and path.startswith('/'), "DAS path %r has wrong format. Need /SAMPLE/CAMPAIGN/FORMAT."%(path)
+      LOG.insist(path.count('/')>=3 and path.startswith('/'),"DAS path %r has wrong format. Need /SAMPLE/CAMPAIGN/FORMAT."%(path))
       #sample = '/'.join(line.split('/')[-3:])
     
     # DATA TYPE
@@ -45,7 +62,7 @@ class Sample(object):
       elif re.search(r"/Run20\d\d",path):
         dtype = 'data'
       dtype = 'mc' # TODO: remove
-    assert dtype in dtypes, "Given data type '%s' is not recongized! Please choose from %s..."%(dtype,', '.join(dtypes))
+    LOG.insist(dtype in dtypes,"Given data type '%s' is not recongized! Please choose from %s..."%(dtype,', '.join(dtypes)))
     
     # ATTRIBUTES
     self.group        = group
@@ -112,7 +129,7 @@ class Sample(object):
     with open(cfgname,'r') as file:
       jobcfg = json.load(file)
     for key in ['group','name','paths','try','channel','chunkdict']:
-      assert key in jobcfg, "Did not find key '%s' in %s"%(key,cfgname)
+      LOG.insist(key in jobcfg,"Did not find key '%s' in %s"%(key,cfgname))
     jobcfg['config']    = cfgname
     jobcfg['chunkdict'] = { int(k): v for k, v in jobcfg['chunkdict'].iteritems() }
     nfilesperjob        = int(jobcfg['nfilesperjob'])
@@ -151,8 +168,10 @@ class Sample(object):
           match_ = True
           break
     if verb>=2:
-      if match_: print ">>> Sample.match: '%s' match to '%s'!"%(sample,pattern)
-      else:      print ">>> Sample.match: NO '%s' match to '%s'!"%(sample,pattern)
+      if match_:
+        print ">>> Sample.match: '%s' match to '%s'!"%(sample,pattern)
+      else:
+        print ">>> Sample.match: NO '%s' match to '%s'!"%(sample,pattern)
     return match_
   
   def getfiles(self,refresh=False,url=True,verb=0):
@@ -166,9 +185,7 @@ class Sample(object):
           storage = getstorage(sepath,verb=verb-1)
           outlist = storage.getfiles(url=url,verb=verb-1)
         else: # get files from DAS
-          dascmd  = 'dasgoclient --query="file dataset=%s instance=%s"'%(path,self.instance) #--limit=0
-          LOG.verb(repr(dascmd),verb)
-          cmdout  = execute(dascmd,verb=verb-1)
+          cmdout  = dasgoclient("file dataset=%s instance=%s"%(path,self.instance))
           outlist = cmdout.split(os.linesep)
         for line in outlist: # filter root files
           line = line.strip()
@@ -185,9 +202,7 @@ class Sample(object):
     nevents = self.nevents
     if nevents<=0 or refresh:
       for path in self.paths:
-        dascmd   = 'dasgoclient --query="summary dataset=%s instance=%s"'%(path,self.instance)
-        LOG.verb(repr(dascmd),verb)
-        cmdout   = execute(dascmd,verb=verb-1)
+        cmdout = dasgoclient("summary dataset=%s instance=%s"%(path,self.instance))
         if "nevents" in cmdout:
           ndasevts = int(cmdout.split('"nevents":')[1].split(',')[0])
         else:

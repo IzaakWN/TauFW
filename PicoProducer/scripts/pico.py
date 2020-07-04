@@ -6,9 +6,9 @@ from collections import OrderedDict
 import ROOT; ROOT.PyConfig.IgnoreCommandLineOptions = True
 from ROOT import TFile
 import TauFW.PicoProducer.tools.config as GLOB
-from TauFW.PicoProducer.tools.file import ensuredir, ensurefile, getline
-from TauFW.PicoProducer.tools.utils import execute, chunkify, repkey
-from TauFW.PicoProducer.tools.log import Logger, color, bold
+from TauFW.common.tools.file import ensuredir, ensurefile, ensureinit, getline
+from TauFW.common.tools.utils import execute, chunkify, repkey
+from TauFW.common.tools.log import Logger, color, bold
 from TauFW.PicoProducer.analysis.utils import getmodule, ensuremodule
 from TauFW.PicoProducer.batch.utils import getbatch, getsamples, getcfgsamples
 from TauFW.PicoProducer.storage.utils import getstorage
@@ -32,6 +32,36 @@ def main_install(args):
   if args.verbosity>=1:
     print ">>> main_install", args
   verbosity = args.verbosity
+  
+
+
+###########
+#   LIST   #
+###########
+
+def main_list(args):
+  """List contents of configuration for those lazy to do 'cat config/config.json'."""
+  if args.verbosity>=1:
+    print ">>> main_list", args
+  verbosity = args.verbosity
+  cfgname   = CONFIG._path
+  if verbosity>=1:
+    print '-'*80
+    print ">>> %-14s = %s"%('cfgname',cfgname)
+    print ">>> %-14s = %s"%('config',CONFIG)
+    print '-'*80
+  
+  print ">>> Configuration %s:"%(cfgname)
+  for variable, value in CONFIG.iteritems():
+    variable = "'"+color(variable)+"'"
+    if isinstance(value,dict):
+      print ">>>  %s:"%(variable)
+      for key, item in value.iteritems():
+        if isinstance(item,basestring): item = str(item)
+        print ">>>    %-12r -> %r"%(str(key),str(item))
+    else:
+      if isinstance(value,basestring): value = str(value)
+      print ">>>  %-24s = %r"%(variable,value)
   
 
 
@@ -60,7 +90,7 @@ def main_get(args):
     print ">>> %-14s = %s"%('cfgname',cfgname)
     print ">>> %-14s = %s"%('config',CONFIG)
     print '-'*80
-    
+  
   # SAMPLES
   if variable=='files':
     
@@ -75,7 +105,7 @@ def main_get(args):
           print ">>> %-12s = %r"%('channel',channel)
         
         # GET SAMPLES
-        assert era in CONFIG.eras, "Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras)
+        LOG.insist(era in CONFIG.eras,"Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras))
         samples = getsamples(era,channel=channel,dtype=dtypes,filter=filters,veto=vetoes,verb=verbosity)
         
         # LOOP over SAMPLES
@@ -126,6 +156,8 @@ def main_set(args):
   if key: # redirect 'channel' and 'era' keys to main_link
     args.subcommand = variable
     return main_link(args)
+  elif variable in ['channel','era']:
+      LOG.throw(IOError,"Variable '%s' is reserved for dictionaries!"%(variable))
   if verbosity>=1:
     print '-'*80
   print ">>> Setting variable '%s' to '%s' config"%(variable,value)
@@ -160,7 +192,7 @@ def main_link(args):
   cfgname   = CONFIG._path
   if verbosity>=1:
     print '-'*80
-  print ">>> Linking %s '%s' to '%s' in config"%(variable,key,value)
+  print ">>> Linking %s '%s' to '%s' in the configuration..."%(variable,key,value)
   if verbosity>=1:
     print ">>> %-14s = %s"%('cfgname',cfgname)
     print ">>> %-14s = %s"%('key',key)
@@ -169,26 +201,76 @@ def main_link(args):
     print '-'*80
   
   # SANITY CHECKS
-  for char in '_-/\,:;!?\'"':
-    if char in value:
-      LOG.throw(IOError,"Value given for %s (%s) cannot contain %s!"%(variable,value,char))
   if varkey not in CONFIG:
     CONFIG[varkey] = { }
-  assert isinstance(CONFIG[varkey],dict), "%s in %s has to be a dictionary"%(varkey,cfgname)
+  LOG.insist(isinstance(CONFIG[varkey],dict),"%s in %s has to be a dictionary"%(varkey,cfgname))
+  oldval = value
+  for char in '_-/\,:;!?\'"':
+    if char in key:
+      LOG.throw(IOError,"Given key '%s', but keys cannot contain any of these characters: %s"%(key,char))
   if varkey=='channels':
-    oldval = value
-    if 'skim' in key.lower() or 'test' in key:
+    if 'skim' in key.lower(): #or 'test' in key:
       value = os.path.basename(value)
       ensurefile("python/processors",value)
     else:
       if 'python/analysis/' in value: # useful for tab completion
         value = value.split('python/analysis/')[-1].replace('/','.')
       value = value.rstrip('.py')
+      path  = os.path.join('python/analysis/','/'.join(value.split('.')[:-1]))
+      print path
+      ensureinit(path,by="pico.py")
       ensuremodule(value)
-    if value!=oldval:
-      print ">>> Converted '%s' to '%s'"%(oldval,value)
+  elif varkey=='eras':
+    if 'samples/' in value: # useful for tab completion
+      value = ''.join(value.split('samples/')[1:])
+    path = os.path.join("samples",repkey(value,ERA='*',CHANNEL='*',TAG='*'))
+    LOG.insist(glob.glob(path),"Did not find any sample lists '%s'"%(path))
+    ensureinit(os.path.dirname(path),by="pico.py")
+  if value!=oldval:
+    print ">>> Converted '%s' to '%s'"%(oldval,value)
+  
   CONFIG[varkey][key] = value
   CONFIG.write()
+  
+
+
+##############
+#   REMOVE   #
+##############
+
+def main_rm(args):
+  """Remove variable from the config file."""
+  if args.verbosity>=1:
+    print ">>> main_rm", args
+  variable  = args.variable
+  key       = args.key # 'channel' or 'era'
+  verbosity = args.verbosity
+  cfgname   = CONFIG._path
+  if verbosity>=1:
+    print '-'*80
+  if key:
+    print ">>> Removing %s '%s' from the configuration..."%(variable,key)
+  else:
+    print ">>> Removing variable '%s' from the configuration..."%(variable)
+  if verbosity>=1:
+    print ">>> %-14s = %s"%('variable',variable)
+    print ">>> %-14s = %s"%('key',key)
+    print ">>> %-14s = %s"%('cfgname',cfgname)
+    print ">>> %-14s = %s"%('config',CONFIG)
+    print '-'*80
+  if key: # redirect 'channel' and 'era' keys to main_link
+    variable = variable+'s'
+    if variable in CONFIG:
+      CONFIG[variable].pop(key)
+      CONFIG.write()
+    else:
+      print ">>> Variable '%s' not in the configuration. Nothing to remove..."%(variable)
+  else:
+    if variable in CONFIG:
+      CONFIG.pop(variable)
+      CONFIG.write()
+    else:
+      print ">>> Variable '%s' not in the configuration. Nothing to remove..."%(variable)
   
 
 
@@ -203,18 +285,22 @@ def main_run(args):
   eras      = args.eras
   channels  = args.channels
   tag       = args.tag
+  outdir    = args.outdir
   dtypes    = args.dtypes
   filters   = args.samples
   vetoes    = args.vetoes
   force     = args.force
   extraopts = args.extraopts
   maxevts   = args.maxevts
+  userfiles = args.infiles
   nfiles    = args.nfiles
   nsamples  = args.nsamples
   dryrun    = args.dryrun
   verbosity = args.verbosity
   
   # LOOP over ERAS
+  if not eras:
+    print ">>> Please specify a valid era (-y) and a channel (-c)."
   for era in eras:
     moddict = { } # save time by loading samples and get their files only once
     
@@ -224,17 +310,17 @@ def main_run(args):
       
       # CHANNEL -> MODULE
       skim = 'skim' in channel.lower()
-      assert channel in CONFIG.channels, "Channel '%s' not found in the configuration file. Available: %s"%(channel,CONFIG.channels)
+      LOG.insist(channel in CONFIG.channels,"Channel '%s' not found in the configuration file. Available: %s"%(channel,CONFIG.channels))
       module = CONFIG.channels[channel]
-      if channel!='test' and not skim:
+      if not skim: # channel!='test' and
         ensuremodule(module)
-      outdir = ensuredir('output')
+      outdir = ensuredir(outdir.lstrip('/'))
       
       # PROCESSOR
-      if 'skim' in channel.lower():
+      if skim:
         processor = module
-      elif channel=='test':
-        processor = module
+      ###elif channel=='test':
+      ###  processor = module
       else:
         processor = "picojob.py"
       processor   = os.path.join("python/processors",processor)
@@ -255,8 +341,8 @@ def main_run(args):
         print ">>> %-12s = %r"%('outdir',outdir)
       
       # GET SAMPLES
-      if filters or vetoes or dtypes:
-        assert era in CONFIG.eras, "Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras)
+      if not userfiles and (filters or vetoes or dtypes):
+        LOG.insist(era in CONFIG.eras,"Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras))
         samples = getsamples(era,channel=channel,tag=tag,dtype=dtypes,filter=filters,veto=vetoes,moddict=moddict,verb=verbosity)
         if nsamples>0:
           samples = samples[:nsamples]
@@ -279,20 +365,25 @@ def main_run(args):
         
         # SETTINGS
         filetag = tag
+        dtype   = None
         if sample:
-          filetag += '_'+sample.name
+          filetag += '_%s_%s'%(era,sample.name)
         if verbosity>=1:
           print ">>> %-12s = %s"%('sample',sample)
           print ">>> %-12s = %r"%('filetag',filetag)
         
         # GET FILES
-        infiles = 0
-        if sample:
+        infiles = [ ]
+        if userfiles:
+          infiles = userfiles[:]
+        elif sample:
           nevents = 0
           infiles = sample.getfiles(verb=verbosity)
+          dtype   = sample.dtype
           if nfiles>0:
             infiles = infiles[:nfiles]
           if verbosity==1:
+            print ">>> %-12s = %r"%('dtype',dtype)
             print ">>> %-12s = %s"%('nfiles',len(infiles))
             print ">>> %-12s = [ "%('infiles')
             for file in infiles:
@@ -303,14 +394,16 @@ def main_run(args):
         
         # RUN
         runcmd = processor
-        if 'skim' in channel.lower():
+        if skim:
           runcmd += " -y %s -o %s --jec-sys"%(era,outdir)
-        elif 'test' in channel:
-          runcmd += " -o %s"%(outdir)
+        ###elif 'test' in channel:
+        ###  runcmd += " -o %s"%(outdir)
         else: # analysis
           runcmd += " -y %s -c %s -M %s -o %s"%(era,channel,module,outdir)
+        if dtype:
+          runcmd += " -d %r"%(dtype)
         if filetag:
-          runcmd += " -t %s"%(filetag)
+          runcmd += " -t %r"%(filetag)
         if maxevts:
           runcmd += " -m %s"%(maxevts)
         if infiles:
@@ -349,6 +442,7 @@ def preparejobs(args):
   prefetch     = args.prefetch
   nfilesperjob = args.nfilesperjob
   split_nfpj   = args.split_nfpj
+  testrun      = args.testrun
   verbosity    = args.verbosity
   jobs         = [ ]
   
@@ -362,9 +456,9 @@ def preparejobs(args):
       
       # CHANNEL -> MODULE
       skim = 'skim' in channel.lower()
-      assert channel in CONFIG.channels, "Channel '%s' not found in the configuration file. Available: %s"%(channel,CONFIG.channels)
+      LOG.insist(channel in CONFIG.channels,"Channel '%s' not found in the configuration file. Available: %s"%(channel,CONFIG.channels))
       module = CONFIG.channels[channel]
-      if channel!='test' and not skim:
+      if not skim: #channel!='test'
         ensuremodule(module)
       if verbosity>=1:
         print '-'*80
@@ -377,8 +471,8 @@ def preparejobs(args):
       # PROCESSOR
       if skim:
         processor = module
-      elif channel=='test':
-        processor = module
+      ###elif channel=='test':
+      ###  processor = module
       else:
         processor = "picojob.py"
       procpath  = os.path.join("python/processors",processor)
@@ -401,10 +495,12 @@ def preparejobs(args):
           print ">>> %-12s = %s"%('jobcfgs',jobcfgs)
         samples = getcfgsamples(jobcfgs,filter=filters,veto=vetoes,dtype=dtypes,verb=verbosity)
       else:
-        assert era in CONFIG.eras, "Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras)
+        LOG.insist(era in CONFIG.eras,"Era '%s' not found in the configuration file. Available: %s"%(era,CONFIG.eras))
         samples = getsamples(era,channel=channel,tag=tag,dtype=dtypes,filter=filters,veto=vetoes,moddict=moddict,verb=verbosity)
       if verbosity>=2:
         print ">>> Found samples: "+", ".join(repr(s.name) for s in samples)
+      if testrun:
+        samples = samples[:2] # only run two samples
       
       # SAMPLE over SAMPLES
       found = False
@@ -418,6 +514,7 @@ def preparejobs(args):
         # DIRECTORIES
         subtry        = sample.subtry+1 if resubmit else 1
         jobids        = sample.jobcfg.get('jobids',[ ])
+        dtype         = sample.dtype
         postfix       = "_%s%s"%(channel,tag)
         jobtag        = '_%s%s_try%d'%(channel,tag,subtry)
         jobname       = sample.name+jobtag.rstrip('try1').rstrip('_')
@@ -439,6 +536,7 @@ def preparejobs(args):
           print '-'*80
           print ">>> Preparing job %ssubmission for '%s'"%("re" if resubmit else "",sample.name)
           print ">>> %-12s = %r"%('processor',processor)
+          print ">>> %-12s = %r"%('dtype',dtype)
           print ">>> %-12s = %r"%('jobname',jobname)
           print ">>> %-12s = %r"%('jobtag',jobtag)
           print ">>> %-12s = %r"%('postfix',postfix)
@@ -453,8 +551,8 @@ def preparejobs(args):
         # CHECKS
         if os.path.isfile(cfgname):
           # TODO: check for running jobs
-          LOG.warning("Job configuration '%s' already exists and will be overwritten! "+
-                      "Beware of conflicting job output!"%(cfgname))
+          LOG.warning("Job configuration %r already exists and will be overwritten! "%(cfgname)+
+                      "Beware of conflicting job output!")
         if not resubmit:
           cfgpattern = re.sub(r"(?<=try)\d+(?=.json$)",r"*",cfgname)
           cfgnames   = [f for f in glob.glob(cfgpattern) if not f.endswith("_try1.json")]
@@ -477,8 +575,8 @@ def preparejobs(args):
           if checkdas:
             nevents = sample.getnevents()
           chunkdict = { }
-        if args.testrun:
-          infiles = infiles[:2]
+        if testrun:
+          infiles = infiles[:2] # only run two files per sample
         if verbosity==1:
           print ">>> %-12s = %s"%('nfilesperjob',nfilesperjob_)
           print ">>> %-12s = %s"%('nfiles',len(infiles))
@@ -517,13 +615,15 @@ def preparejobs(args):
               filetag  += "_%d"%(ichunk)
             jobcmd      = processor
             if skim:
-              jobcmd += " -y %s --copydir %s -t %s --jec-sys"%(era,outdir,filetag)
-            elif channel=='test':
-              jobcmd += " -o %s -t %s -i %s"%(outdir,filetag)
+              jobcmd += " -y %s -d %r --copydir %s -t %s --jec-sys"%(era,dtype,outdir,filetag)
+            ###elif channel=='test':
+            ###  jobcmd += " -o %s -t %s -i %s"%(outdir,filetag)
             else:
-              jobcmd += " -y %s -c %s -M %s --copydir %s -t %s"%(era,channel,module,outdir,filetag)
+              jobcmd += " -y %s -d %r -c %s -M %s --copydir %s -t %s"%(era,dtype,channel,module,outdir,filetag)
             if prefetch:
               jobcmd += " -p"
+            if testrun:
+              jobcmd += " -m %d"%(testrun) # process a limited amount of events
             if extraopts:
               runcmd += " --opt %s"%(' '.join(extraopts))
             jobcmd += " -i %s"%(jobfiles) # add last
@@ -537,7 +637,7 @@ def preparejobs(args):
         jobcfg = OrderedDict([
           ('time',str(datetime.now())),
           ('group',sample.group), ('paths',sample.paths), ('name',sample.name), ('nevents',nevents),
-          ('dtype',sample.dtype), ('channel',channel),    ('module',module),
+          ('dtype',dtype),        ('channel',channel),    ('module',module),
           ('jobname',jobname),    ('jobtag',jobtag),      ('tag',tag),          ('postfix',postfix),
           ('try',subtry),         ('jobids',jobids),
           ('outdir',outdir),      ('jobdir',jobdir),      ('cfgdir',cfgdir),    ('logdir',logdir),
@@ -549,8 +649,6 @@ def preparejobs(args):
         # YIELD
         yield jobcfg
         print
-        #if args.testrun:
-        #  break # only run one sample
       
       if not found:
         print ">>> Did not find any samples."
@@ -869,6 +967,9 @@ def main_submit(args):
   resubmit  = args.subcommand=='resubmit'
   force     = args.force #or True
   dryrun    = args.dryrun #or True
+  testrun   = args.testrun #or True
+  queue     = args.queue
+  batchopts = args.batchopts
   batch     = getbatch(CONFIG,verb=verbosity+1)
   
   for jobcfg in preparejobs(args):
@@ -886,13 +987,15 @@ def main_submit(args):
       script  = "python/batch/submit_HTCondor.sub"
       appcmds = ["initialdir=%s"%(jobdir),
                  "mylogfile='log/%s.$(ClusterId).$(ProcId).log'"%(jobname)]
-      queue   = "arg from %s"%(joblist)
-      option  = "" #-dry-run dryrun.log"
-      jobid   = batch.submit(script,name=jobname,opt=option,app=appcmds,queue=queue,dry=dryrun)
+      if testrun and not queue:
+        queue = "espresso"
+      qcmd    = "arg from %s"%(joblist)
+      #batchopts += "-dry-run dryrun.log"
+      jobid   = batch.submit(script,name=jobname,app=appcmds,qcmd=qcmd,opt=batchopts,queue=queue,dry=dryrun)
     elif batch.system=='SLURM':
       script  = "python/batch/submit_SLURM.sh %s"%(joblist)
       logfile = os.path.join(logdir,"%x.%A.%a") # $JOBNAME.o$JOBID.$TASKID
-      jobid   = batch.submit(script,name=jobname,log=logfile,array=nchunks,dry=dryrun)
+      jobid   = batch.submit(script,name=jobname,log=logfile,array=nchunks,opt=batchopts,queue=queue,dry=dryrun)
     #elif batch.system=='SGE':
     #elif batch.system=='CRAB':
     else:
@@ -1063,42 +1166,46 @@ def main_status(args):
 if __name__ == "__main__":
   
   # COMMON
-  parser = ArgumentParser(prog='run.py')
+  description = "Central script to process nanoAOD for skimming or analysis."
+  parser = ArgumentParser(prog='pico.py',description=description,epilog="Good luck!")
   parser_cmn = ArgumentParser(add_help=False)
   parser_cmn.add_argument('-v', '--verbose',    dest='verbosity', type=int, nargs='?', const=1, default=0, action='store',
                                                 help="set verbosity" )
   parser_sam = ArgumentParser(add_help=False,parents=[parser_cmn])
   parser_lnk = ArgumentParser(add_help=False,parents=[parser_cmn])
   parser_sam.add_argument('-c','--channel',     dest='channels', choices=CONFIG.channels.keys(), default=[ ], nargs='+',
-                                                help='channel')
+                                                help='skimming or analysis channel to run')
   parser_sam.add_argument('-y','-e','--era',    dest='eras', choices=CONFIG.eras.keys(), default=[ ], nargs='+',
-                                                help='year or era')
+                                                help='year or era to specify the sample list')
   parser_sam.add_argument('-s', '--sample',     dest='samples', type=str, nargs='+', default=[ ], action='store',
-                          metavar='PATTERN',    help="filter these samples; glob patterns (wildcards * and ?) are allowed." )
+                          metavar='PATTERN',    help="filter these samples; glob patterns like '*' and '?' wildcards are allowed" )
   parser_sam.add_argument('-x', '--veto',       dest='vetoes', nargs='+', default=[ ], action='store',
-                          metavar='PATTERN',    help="exclude/veto this sample" )
+                          metavar='PATTERN',    help="exclude/veto these samples; glob patterns are allowed" )
   parser_sam.add_argument('--dtype',            dest='dtypes', choices=GLOB._dtypes, default=GLOB._dtypes, nargs='+',
-                                                help='data type')
+                                                help='filter these data type(s)')
   parser_sam.add_argument('-D','--das',         dest='checkdas', default=False, action='store_true',
-                                                help="check DAS for number of events" )
+                                                help="check DAS for total number of events" )
   parser_sam.add_argument('-t','--tag',         dest='tag', default="",
-                                                help='tag for output')
+                                                help='tag for output file name')
   parser_sam.add_argument('-f','--force',       dest='force', action='store_true',
                                                 help='force overwrite')
   parser_sam.add_argument('-d','--dry',         dest='dryrun', action='store_true',
-                                                help='dry run for debugging purposes')
+                                                help='dry run: prepare job without submitting for debugging purposes')
   parser_sam.add_argument('-E', '--opts',       dest='extraopts', type=str, nargs='+', default=[ ],
-                          metavar='KEY=VALUE',  help="extra options for the skim or analysis module")
+                          metavar='KEY=VALUE',  help="extra options for the skim or analysis module, "
+                                                     "passed as list of 'KEY=VALUE', separated by spaces")
   parser_job = ArgumentParser(add_help=False,parents=[parser_sam])
   parser_job.add_argument('-p','--prefetch',    dest='prefetch', default=False, action='store_true',
                                                 help="copy remote file during job to increase processing speed and ensure stability" )
-  parser_job.add_argument('--test',             dest='testrun', action='store_true',
-                                                help='run a test with limited nummer of jobs')
+  parser_job.add_argument('--test',             dest='testrun', type=int, nargs='?', const=10000, default=0, action='store',
+                                                help='run a test with limited nummer of jobs, default=%(default)d' )
   parser_job.add_argument('--getjobs',          dest='checkqueue', type=int, nargs='?', const=1, default=-1, action='store',
                           metavar='N',          help="check job status: 0 (no check), 1 (check once), -1 (check every job)" ) # speed up if batch is slow
   parser_chk = ArgumentParser(add_help=False,parents=[parser_job])
-  #parser_job.add_argument('-B','--batch-opts',  dest='batchopts', default=None,
-  #                                              help='extra options for the batch system')
+  parser_job.add_argument('-q','--queue',       dest='queue', default=None,
+                                                help='queue of batch system')
+  parser_job.add_argument('-B','--batch-opts',  dest='batchopts', default=None,
+                                                help='extra options for the batch system')
   parser_job.add_argument('-n','--filesperjob', dest='nfilesperjob', type=int, default=CONFIG.nfilesperjob,
                                                 help='number of files per job, default=%(default)d')
   parser_job.add_argument('--split',            dest='split_nfpj', type=int, nargs='?', const=2, default=1, action='store',
@@ -1106,21 +1213,37 @@ if __name__ == "__main__":
   
   # SUBCOMMANDS
   subparsers = parser.add_subparsers(title="sub-commands",dest='subcommand',help="sub-command help")
-  parser_ins = subparsers.add_parser('install',  parents=[parser_cmn], help='install')
-  parser_get = subparsers.add_parser('get',      parents=[parser_sam], help='get information from configuration or samples')
-  parser_set = subparsers.add_parser('set',      parents=[parser_cmn], help='set given variable in the configuration file')
-  parser_chl = subparsers.add_parser('channel',  parents=[parser_lnk], help='link a channel to a module in the configuration file')
-  parser_era = subparsers.add_parser('era',      parents=[parser_lnk], help='link an era to a sample list in the configuration file')
-  parser_run = subparsers.add_parser('run',      parents=[parser_sam], help='run local post processor')
-  parser_sub = subparsers.add_parser('submit',   parents=[parser_job], help='submit post-processing jobs')
-  parser_res = subparsers.add_parser('resubmit', parents=[parser_job], help='resubmit failed post-processing jobs')
-  parser_sts = subparsers.add_parser('status',   parents=[parser_chk], help='status of post-processing jobs')
-  parser_hdd = subparsers.add_parser('hadd',     parents=[parser_chk], help='hadd post-processing job output')
+  help_ins = "install"
+  help_lst = "list configuration"
+  help_get = "get information from configuration or samples"
+  help_set = "set given variable in the configuration file"
+  help_rmv = "remove given variable from the configuration file"
+  help_chl = "link a channel to a module in the configuration file"
+  help_era = "link an era to a sample list in the configuration file"
+  help_run = "run local post processor"
+  help_sub = "submit post-processing jobs"
+  help_res = "resubmit failed post-processing jobs"
+  help_sts = "status of post-processing jobs"
+  help_hdd = "hadd post-processing job output"
+  parser_ins = subparsers.add_parser('install',  parents=[parser_cmn], help=help_ins, description=help_ins)
+  parser_lst = subparsers.add_parser('list',     parents=[parser_cmn], help=help_lst, description=help_lst)
+  parser_get = subparsers.add_parser('get',      parents=[parser_sam], help=help_get, description=help_get)
+  parser_set = subparsers.add_parser('set',      parents=[parser_cmn], help=help_set, description=help_set)
+  parser_rmv = subparsers.add_parser('rm',       parents=[parser_cmn], help=help_rmv, description=help_rmv)
+  parser_chl = subparsers.add_parser('channel',  parents=[parser_lnk], help=help_chl, description=help_chl)
+  parser_era = subparsers.add_parser('era',      parents=[parser_lnk], help=help_era, description=help_era)
+  parser_run = subparsers.add_parser('run',      parents=[parser_sam], help=help_run, description=help_run)
+  parser_sub = subparsers.add_parser('submit',   parents=[parser_job], help=help_sub, description=help_sub)
+  parser_res = subparsers.add_parser('resubmit', parents=[parser_job], help=help_res, description=help_res)
+  parser_sts = subparsers.add_parser('status',   parents=[parser_chk], help=help_sts, description=help_sts)
+  parser_hdd = subparsers.add_parser('hadd',     parents=[parser_chk], help=help_hdd, description=help_hdd)
   #parser_get.add_argument('variable',           help='variable to change in the config file')
   parser_get.add_argument('variable',           help='variable to get information on')
   parser_set.add_argument('variable',           help='variable to change in the config file')
   parser_set.add_argument('key',                help='channel or era key name', nargs='?', default=None)
   parser_set.add_argument('value',              help='value for given value')
+  parser_rmv.add_argument('variable',           help='variable to remove from the config file')
+  parser_rmv.add_argument('key',                help='channel or era key name to remove', nargs='?', default=None)
   parser_chl.add_argument('key',                metavar='channel', help='channel key name')
   parser_chl.add_argument('value',              metavar='module',  help='module linked to by given channel')
   parser_era.add_argument('key',                metavar='era',     help='era key name')
@@ -1134,25 +1257,29 @@ if __name__ == "__main__":
   parser_run.add_argument('-m','--maxevts',     dest='maxevts', type=int, default=None,
                                                 help='maximum number of events (per file) to process')
   parser_run.add_argument('-n','--nfiles',      dest='nfiles', type=int, default=1,
-                                                help='maximum number of input files to process')
+                                                help="maximum number of input files to process (per sample), default=%(default)d")
   parser_run.add_argument('-S', '--nsamples',   dest='nsamples', type=int, default=1,
-                                                help='number of samples to run')
+                                                help="number of samples to run, default=%(default)d")
+  parser_run.add_argument('-i', '--input',      dest='infiles', nargs='+', default=[ ],
+                                                help="input files (nanoAOD)")
+  parser_run.add_argument('-o', '--outdir',     dest='outdir', type=str, default='output',
+                                                help="output directory, default=%(default)r")
   parser_get.add_argument('-w','--write',       dest='write', type=str, nargs='?', const=str(CONFIG.filelistdir), default="", action='store',
                           metavar='FILE',       help="write file list, default=%(const)r" )
   
   # ABBREVIATIONS
   args = sys.argv[1:]
   if args:
-    subcmds = [ 
-      'install','set','channel','era',
+    subcmds = [ # fix order
+      'channel','era',
       'run','submit','resubmit','status','hadd',
+      'install','list','set','rm'
     ]
     for subcmd in subcmds:
       if args[0] in subcmd[:len(args[0])]: # match abbreviation
         args[0] = subcmd
         break
   args = parser.parse_args(args)
-  #args.testrun = True
   if hasattr(args,'tag') and len(args.tag)>=1 and args.tag[0]!='_':
     args.tag = '_'+args.tag
   
@@ -1160,12 +1287,16 @@ if __name__ == "__main__":
   os.chdir(CONFIG.basedir)
   if args.subcommand=='install':
     main_install(args)
+  if args.subcommand=='list':
+    main_list(args)
   elif args.subcommand=='get':
     main_get(args)
   elif args.subcommand=='set':
     main_set(args)
   elif args.subcommand in ['channel','era']:
     main_link(args)
+  elif args.subcommand=='rm':
+    main_rm(args)
   elif args.subcommand=='run':
     main_run(args)
   elif args.subcommand in ['submit','resubmit']:

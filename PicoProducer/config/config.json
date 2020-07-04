@@ -1,16 +1,16 @@
 {
-  "jobdir": "output/$ERA/$CHANNEL/$SAMPLE", 
   "channels": {
     "skim": "skimjob.py", 
-    "test": "test.py", 
     "gen": "GenDumper", 
     "mutau": "ModuleMuTauSimple"
   }, 
   "eras": {
-    "2016": "samples_2016.py", 
-    "2017": "samples_2017.py", 
-    "2018": "samples_2018.py"
+    "2016": "examples/samples_2016.py", 
+    "2017": "examples/samples_2017.py", 
+    "2018": "examples/samples_2018.py"
   }, 
   "batch": "HTCondor", 
-  "nfilesperjob": 1
-} 
+  "nfilesperjob": 1, 
+  "filelistdir": "samples/files/$ERA/$SAMPLE.txt", 
+  "jobdir": "output/$ERA/$CHANNEL/$SAMPLE"
+}

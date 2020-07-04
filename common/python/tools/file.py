@@ -2,7 +2,7 @@
 import os, re, shutil
 from abc import ABCMeta, abstractmethod
 from subprocess import Popen, PIPE, STDOUT
-from ROOT import TFile
+import ROOT; ROOT.PyConfig.IgnoreCommandLineOptions = True
 
 
 def writetemplate(templatename,outfilename,sublist=[],rmlist=[],**kwargs):
@@ -28,7 +28,9 @@ def ensuredir(*dirnames,**kwargs):
   dirname   = os.path.join(*dirnames)
   empty     = kwargs.get('empty', False)
   verbosity = kwargs.get('verb',  0    )
-  if not os.path.exists(dirname):
+  if not dirname:
+    pass
+  elif not os.path.exists(dirname):
     os.makedirs(dirname)
     if verbosity>=1:
       print '>>> Made directory "%s"'%(dirname)
@@ -81,11 +83,23 @@ def ensureTFile(filename,option='READ'):
   if not os.path.isfile(filename):
     raise IOError('File in path "%s" does not exist!'%(filename))
     exit(1)
-  file = TFile(filename,option)
+  file = ROOT.TFile.Open(filename,option)
   if not file or file.IsZombie():
     raise IOError('Could not open file by name "%s"'%(filename))
     exit(1)
   return file
+  
+
+def ensureinit(*paths,**kwargs):
+  """Ensure an __init__.py exists, other wise, create one."""
+  init   = os.path.join(os.path.join(*paths),'__init__.py')
+  script = kwargs.get('by',"")
+  if not os.path.isfile(init):
+    print ">>> Creating '%s' to allow import of module..."%(init)
+    with open(init,'w') as file:
+      if script:
+        script = "by "+script
+      file.write("# Generated%s to allow import of the sample list modules\n"%(script))
   
 
 #def extractTH1(file,histname,setdir=True,close=None):

@@ -9,7 +9,7 @@ The analysis modules are run on nanoAOD with the [post-processors](https://githu
 for example with [`picojob.py`](../processors/skimjob.py).
 The output is a custom analysis ntuple, we refer to as the _pico_ format.
 
-#### Table of Contents  
+### Table of Contents  
 * [Run](#Run)<br>
 * [Accessing nanoAOD](#Accessing-nanoAOD)<br>
 * [Custom tree format](#Custom-tree-format)<br>
@@ -71,6 +71,7 @@ Without loss of performance, you can make the latter more readable using
 [`Collection`](https://github.com/cms-nanoAOD/nanoAOD-tools/blob/master/python/postprocessing/framework/datamodel.py):
 ```
 from PhysicsTools.NanoAODTools.postprocessing.framework.eventloop import Module
+from PhysicsTools.NanoAODTools.postprocessing.framework.datamodel import Collection
 class ModuleMuTauSimple(Module):
   def analyze(self, event):
     muons = [ ]
@@ -86,8 +87,8 @@ Triggers are saved as booleans, e.g.
     if not event.HLT_IsoMu24:
       return False
 ```
-To save space, some identification working points (WPs) are saved in nanoAOD as `UChar_t`, which is 1 byte (8 bits),
-instead of 4 bytes (64 bits) like `Int_t`. For example, to require the Medium WP of the `DeepTau2017v2p1VSjet` tau identification,
+To reduce the nanoAOD file size, some identification working points (WPs) are saved in nanoAOD as `UChar_t`, which is 1 byte (8 bits),
+instead of 4 bytes (32 bits) like `Int_t`. For example, to require the Medium WP of the `DeepTau2017v2p1VSjet` tau identification,
 you see in the [documentation](https://cms-nanoaod-integration.web.cern.ch/integration/master-102X/mc102X_doc.html#Tau)
 that it corresponds to the fifth bit, i.e. `16`.
 To access them in `python`, you may need the [built-in function `ord`](https://docs.python.org/3/library/functions.html#ord), e.g.
@@ -111,11 +112,11 @@ use [bitwise operators](https://www.tutorialspoint.com/python/bitwise_operators_
 isPrompt    = GenPart_statusFlags[i] & 1
 hardProcess = GenPart_statusFlags[i] & 128
 ```
-which has values `0` or `1`. Here `128` is computed as `2**7` or `1<<7`.
+which has values `0` or `1`. Here, `128` is computed as a power of 2, `2**7`, or a bitwise left shift, `1<<7`.
 The help function `hasbit` in [`utils.py`](utils.py) can be used:
 ```
 isPrompt    = hasbit(GenPart_statusFlags[i],0)
-hardProcess = hasbit(GenPart_statusFlags[i],8)
+hardProcess = hasbit(GenPart_statusFlags[i],7)
 ```
 
 
@@ -128,12 +129,12 @@ class ModuleMuTauSimple(Module):
     self.outfile = TFile(fname,'RECREATE')
   def beginJob(self):
     self.tree = TTree('tree','tree')
-    self.pt_1 = np.zeros(1,dtype=float) # float
-    self.q_1  = np.zeros(1,dtype=int)   # integer
-    self.id_1 = np.zeros(1,dtype=bool)  # boolean
-    self.tree.Branch('pt_1',self.pt_1,'pt_1/F')
-    self.tree.Branch('q_1', self.q_1, 'q_1/I')
-    self.tree.Branch('id_1',self.id_1,'id_1/O')
+    self.pt_1 = np.zeros(1,dtype='f') # 32-bit float
+    self.q_1  = np.zeros(1,dtype='i') # 32-bit integer
+    self.id_1 = np.zeros(1,dtype='?') # 1 byte boolean
+    self.tree.Branch('pt_1',self.pt_1,'pt_1/F') # Float_t
+    self.tree.Branch('q_1', self.q_1, 'q_1/I')  # Int_t
+    self.tree.Branch('id_1',self.id_1,'id_1/O') # Boot_t
   def analyze(self, event):
     self.pt_1[0] = 20.0
     self.q_1[0]  = -1
@@ -146,7 +147,11 @@ class ModuleMuTauSimple(Module):
 ```
 More information on data types:
 * In `ROOT`: https://root.cern.ch/doc/master/classTTree.html#addcolumnoffundamentaltypes
-* In `numpy`: https://numpy.org/doc/stable/reference/arrays.dtypes.html#specifying-and-constructing-data-types
+* In `numpy`: https://numpy.org/devdocs/user/basics.types.html
+
+<p align="center">
+  <img src="../../../docs/file_pico_mutau_simple.png" alt="Pico file of ModuleMuTauSimple" width="700"/>
+</p>
 
 To make your life easier, you can use separate "tree producer" classes.
 For example, [`TreeProducer`](TreeProducer.py) can be subclassed as in [`TreeProducerMuTau.py`](TreeProducerMuTau.py).
@@ -201,6 +206,10 @@ class ModuleMuTau(ModuleTauPair):
     self.out.cutflow.fill('tau')
     return True
 ```
+
+<p align="center">
+  <img src="../../../docs/cutflow.png" alt="Cutflow (mutau)" width="600"/>
+</p>
 
 ## Tau pair analysis
 A set of full analysis modules for the basic study of events with a pair of tau decay candidates

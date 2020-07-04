@@ -6,8 +6,8 @@ import importlib
 import getpass, platform
 from collections import OrderedDict
 from TauFW.PicoProducer import basedir
-from TauFW.PicoProducer.tools.file import ensuredir, ensurefile
-from TauFW.PicoProducer.tools.log import Logger, color, bold, header
+from TauFW.common.tools.file import ensuredir, ensurefile
+from TauFW.common.tools.log import Logger, color, bold, header
 from TauFW.PicoProducer.storage.utils import getsedir, gettmpdir
 
 
@@ -64,7 +64,7 @@ def getconfig(verb=0,refresh=False):
     update = False
     for key in _cfgdefaults.keys(): # check for missing keys
       if key not in cfgdict:
-        LOG.warning("Key '%s' not set in config file %s. Setting to default %r"%(key,cfgname,_cfgdefaults[key]))
+        LOG.warning("Key '%s' not set in config file %s. Setting to default %r"%(key,os.path.relpath(cfgname),_cfgdefaults[key]))
         cfgdict[key] = _cfgdefaults[key]
         update = True
     if update:
@@ -155,6 +155,10 @@ class Config(object):
   def __iter__(self):
     return iter(self._dict)
   
+  def iteritems(self):
+    for x in self._dict.iteritems():
+      yield x
+  
   def __len__(self):
     return len(self._dict)
   
@@ -169,6 +173,9 @@ class Config(object):
     with open(path,'r') as infile:
       self._dict = json.load(infile,object_pairs_hook=OrderedDict)
     return self._dict
+  
+  def pop(self,*args,**kwargs):
+    self._dict.pop(*args,**kwargs)
   
   def write(self,path=None):
     if path==None:
