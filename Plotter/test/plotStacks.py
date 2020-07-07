@@ -1,12 +1,11 @@
 #! /usr/bin/env python
 # Author: Izaak Neutelings (June 2020)
 # Description: Test script for Stack class
-#   test/plotStacks.py && eog plots/testStacks*.png
+#   test/plotStacks.py -v2 && eog plots/testStacks*.png
 from array import array
-from TauFW.common.tools.file import ensuredir
+from TauFW.Plotter.plot.utils import LOG, ensuredir
 from TauFW.Plotter.plot.Stack import Stack, CMSStyle
 from ROOT import TH1D, gRandom, TColor, kBlack, kWhite, kBlue, kOrange, kMagenta
-from TauFW.Plotter.plot.utils import LOG
 from TauFW.Plotter.plot.Variable import Variable
 
 
@@ -39,6 +38,7 @@ def plotstack(xname,xtitle,datahist,exphists,ratio=False,logy=False):
   plot.drawlegend(position=position)
   plot.drawtext(text)
   plot.saveas(fname+".png")
+  plot.saveas(fname+".pdf")
   #plot.saveas(fname+".C")
   #plot.saveas(fname+".png",fname+".C")
   #plot.saveas(fname,ext=['png','pdf'])
@@ -114,6 +114,11 @@ def main():
        ('ZTT', "Z -> #tau_{mu}#tau_{h}", 1.0, gRandom.Gaus, ( 72, 9)),
        ('QCD', "QCD multiplet",          1.2, gRandom.Gaus, ( 80,60)),
        ('TT', "t#bar{t}",                1.0, gRandom.Gaus, (120,70)),
+     ]),
+    (('pt_1',"Leading p_{T} [GeV]",50,0,100), [
+      ('ZTT', "Z -> #tau_{mu}#tau_{h}", 1.2, gRandom.Landau, (30,2)),
+      ('QCD', "QCD multiplet",          0.3, gRandom.Landau, (30,5)),
+      ('TT', "t#bar{t}",                0.2, gRandom.Landau, (40,6)),
      ]),
     (('njets',"Number of jets",8,0,8), [
       ('ZTT', "Z -> #tau_{mu}#tau_{h}", 1.2, gRandom.Poisson, (0.2,)),

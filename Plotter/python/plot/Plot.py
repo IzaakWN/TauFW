@@ -1,5 +1,5 @@
-# Author: Izaak Neutelings (June 2020)
 # -*- coding: utf-8 -*-
+# Author: Izaak Neutelings (June 2020)
 import os, re
 from math import log10
 from TauFW.common.tools.utils import ensurelist, islist, isnumber
@@ -65,6 +65,7 @@ class Plot(object):
     frame      = kwargs.get('frame', self.hists[0] )
     if isinstance(variable,Variable):
       self.variable        = variable
+      self.name            = kwargs.get('name',      variable.filename  )
       self.xtitle          = kwargs.get('xtitle',    variable.title     )
       self.xmin            = kwargs.get('xmin',      variable.xmin      )
       self.xmax            = kwargs.get('xmax',      variable.xmax      )
@@ -82,31 +83,32 @@ class Plot(object):
       self.dividebybinsize = kwargs.get('dividebybinsize', variable.dividebybinsize)
     else:
       self.variable        = variable
+      self.name            = kwargs.get('name',      None               )
       self.xtitle          = kwargs.get('xtitle', self.variable or frame.GetXaxis().GetTitle() )
       self.xmin            = kwargs.get('xmin', frame.GetXaxis().GetXmin() )
       self.xmax            = kwargs.get('xmax', frame.GetXaxis().GetXmax() )
-      self.ymin            = kwargs.get('ymin',      None           )
-      self.ymax            = kwargs.get('ymax',      None           )
-      self.rmin            = kwargs.get('rmin',      None           )
-      self.rmax            = kwargs.get('rmax',      None           )
-      self.binlabels       = kwargs.get('binlabels', None           )
-      self.logx            = kwargs.get('logx',      False          )
-      self.logy            = kwargs.get('logy',      False          )
-      self.ymargin         = kwargs.get('ymargin',   None           )
-      self.logyrange       = kwargs.get('logyrange', None           )
-      self.position        = kwargs.get('position',  ""             )
-      self.latex           = kwargs.get('latex',     True           )
+      self.ymin            = kwargs.get('ymin',      None               )
+      self.ymax            = kwargs.get('ymax',      None               )
+      self.rmin            = kwargs.get('rmin',      None               )
+      self.rmax            = kwargs.get('rmax',      None               )
+      self.binlabels       = kwargs.get('binlabels', None               )
+      self.logx            = kwargs.get('logx',      False              )
+      self.logy            = kwargs.get('logy',      False              )
+      self.ymargin         = kwargs.get('ymargin',   None               )
+      self.logyrange       = kwargs.get('logyrange', None               )
+      self.position        = kwargs.get('position',  ""                 )
+      self.latex           = kwargs.get('latex',     True               )
       self.dividebybinsize = kwargs.get('dividebybinsize', frame.GetXaxis().IsVariableBinSize())
     self.ytitle            = kwargs.get('ytitle',    frame.GetYaxis().GetTitle() or None )
-    self.name              = kwargs.get('name',      None           ) or (self.hists[0].GetName() if self.hists else "noname")
-    self.title             = kwargs.get('title',     None           )
+    self.name              = self.name or (self.hists[0].GetName() if self.hists else "noname")
+    self.title             = kwargs.get('title',     None               )
     self.errband           = None
-    self.ratio             = kwargs.get('ratio',     False          )
-    self.append            = kwargs.get('append',    ""             )
-    self.norm              = kwargs.get('norm',      False          )
-    self.lcolors           = kwargs.get('lcolors',   _lcolors       )
-    self.fcolors           = kwargs.get('fcolors',   _fcolors       )
-    self.lstyles           = kwargs.get('lstyles',   _lstyles       )
+    self.ratio             = kwargs.get('ratio',     False              )
+    self.append            = kwargs.get('append',    ""                 )
+    self.norm              = kwargs.get('norm',      False              )
+    self.lcolors           = kwargs.get('lcolors',   _lcolors           )
+    self.fcolors           = kwargs.get('fcolors',   _fcolors           )
+    self.lstyles           = kwargs.get('lstyles',   _lstyles           )
     self.canvas            = None
     self.frame             = frame
     self.legend            = None
@@ -170,6 +172,7 @@ class Plot(object):
     lcolors         = ensurelist(lcolors)
     fcolors         = ensurelist(fcolors)
     lstyles         = ensurelist(lstyles)
+    self.ratio      = ratio
     self.lcolors    = lcolors
     self.fcolors    = fcolors
     self.lstyles    = lstyles
@@ -274,15 +277,20 @@ class Plot(object):
   
   def saveas(self,*fnames,**kwargs):
     """Save plot, close canvas and delete the histograms."""
-    save  = kwargs.get('save',  True  )
-    close = kwargs.get('close', False )
-    exts  = kwargs.get('ext',   [ ]   ) #[".png"]
-    pdf   = kwargs.get('pdf',   False )
-    exts  = ensurelist(exts)
+    save   = kwargs.get('save',   True  )
+    close  = kwargs.get('close',  False )
+    outdir = kwargs.get('outdir', ""    ) # output directory
+    tag    = kwargs.get('tag',    ""    ) # extra tag for output file
+    exts   = kwargs.get('ext',    [ ]   ) # [".png"]
+    pdf    = kwargs.get('pdf',    False )
+    exts   = ensurelist(exts)
     if pdf:
       exts.append(".pdf")
+    if not fnames:
+      fnames = [self.name+tag]
     if save:
       for fname in fnames:
+        fname = os.path.join(outdir,fname.replace('$VAR',self.name).replace('$NAME',self.name))
         if exts:
           for ext in ensurelist(exts):
             if not ext.startswith('.'):
@@ -307,7 +315,7 @@ class Plot(object):
       deletehist(self.errband)
     for hist in self.garbage:
       deletehist(hist)
-    if self.ratio:
+    if isinstance(self.ratio,Ratio):
       self.ratio.close()
     
   
@@ -415,7 +423,7 @@ class Plot(object):
     if ratiorange:
       ymin, ymax  = 1-ratiorange, 1+ratiorange
     if intbins and nbins<15 and int(xmin)==xmin and int(xmax)==xmax and binwidth==1:
-      LOG.verb("Plot.setaxes: Setting integer binning for (%s,%d,%d)!"%(nbins,xmin,xmax),verbosity,1)
+      LOG.verb("Plot.setaxes: Setting integer binning for (%r,%s,%d,%d)!"%(xtitle,nbins,xmin,xmax),verbosity,1)
       binlabels   = [str(i) for i in range(int(xmin),int(xmax)+1)]
       xlabelsize   *= 1.6
       xlabeloffset *= 0.88*scale
@@ -449,13 +457,13 @@ class Plot(object):
     if logy:
       if not ymin or ymin<=0: # avoid zero or negative ymin for log plots
         ymin = 10**(magnitude(hmax)-logyrange) #max(0.1,10**(magnitude(ymax)-3))
-        LOG.verb("Plot.setaxes: logy=%s, hmax=%.6g, magnitude(hmax)=%s, logyrange=%s, ymin=%.6g"%(
+        LOG.verb("Plot.setaxes: logy=%s, hmax=%6.6g, magnitude(hmax)=%s, logyrange=%s, ymin=%6.6g"%(
                                 logy,hmax,magnitude(hmax),logyrange,ymin),verbosity,2)
       if ymax==None:
         if hmax>ymin>0:
           span = abs(log10(hmax/ymin))*ymargin
           ymax = ymin*(10**span)
-          LOG.verb("Plot.setaxes: log10(hmax/ymin)=%.6g, span=%.6g, ymax=%.6g"%(log10(hmax/ymin),span,ymax),verbosity,2)
+          LOG.verb("Plot.setaxes: log10(hmax/ymin)=%6.6g, span=%6.6g, ymax=%6.6g"%(log10(hmax/ymin),span,ymax),verbosity,2)
         else:
           ymax = hmax*ymargin
       gPad.Update(); gPad.SetLogy()
@@ -524,19 +532,22 @@ class Plot(object):
     frame.GetYaxis().SetNdivisions(nydivisions)
     frame.GetYaxis().SetTitle(ytitle)
     
-    if verbosity>=2:
+    if verbosity>=1:
+      print ">>> Plot.setaxes: xtitle=%r, [hmin,hmax] = [%.6g,%.6g], [xmin,xmax] = [%.6g,%.6g], [ymin,ymax] = [%.6g,%.6g]"%(
+                               xtitle,hmin,hmax,xmin,xmax,ymin,ymax)
+    elif verbosity>=2:
       print ">>> Plot.setaxes: frame=%s"%(frame)
       print ">>> Plot.setaxes: hists=%s"%(hists)
       print ">>> Plot.setaxes: [hmin,hmax] = [%.6g,%.6g], [xmin,xmax] = [%.6g,%.6g], [ymin,ymax] = [%.6g,%.6g]"%(hmin,hmax,xmin,xmax,ymin,ymax)
-      print ">>> Plot.setaxes: xtitlesize=%.4g, xlabelsize=%.4g, xtitleoffset=%.4g, xtitle=%r"%(xtitlesize,xlabelsize,xtitleoffset,xtitle)
-      print ">>> Plot.setaxes: ytitlesize=%.4g, ylabelsize=%.4g, ytitleoffset=%.4g, ytitle=%r"%(ytitlesize,ylabelsize,ytitleoffset,ytitle)
-      print ">>> Plot.setaxes: scale=%.4g, nxdivisions=%s, nydivisions=%s, ymargin=%.3f, logyrange=%.3f"%(scale,nxdivisions,nydivisions,ymargin,logyrange)
+      print ">>> Plot.setaxes: xtitlesize=%4.4g, xlabelsize=%4.4g, xtitleoffset=%4.4g, xtitle=%r"%(xtitlesize,xlabelsize,xtitleoffset,xtitle)
+      print ">>> Plot.setaxes: ytitlesize=%4.4g, ylabelsize=%4.4g, ytitleoffset=%4.4g, ytitle=%r"%(ytitlesize,ylabelsize,ytitleoffset,ytitle)
+      print ">>> Plot.setaxes: scale=%4.4g, nxdivisions=%s, nydivisions=%s, ymargin=%.3f, logyrange=%.3f"%(scale,nxdivisions,nydivisions,ymargin,logyrange)
     if main:
       if any(a!=None and a!=b for a, b in [(self.xmin,xmin),(self.xmax,xmax)]):
-        LOG.warning("Plot.setaxes: x axis range changed: [xmin,xmax] = [%.6g,%.6g] -> [%.6g,%.6g]"%(
+        LOG.warning("Plot.setaxes: x axis range changed: [xmin,xmax] = [%6.6g,%6.6g] -> [%6.6g,%6.6g]"%(
                     self.xmin,self.xmax,xmin,xmax))
       if any(a!=None and a!=b for a, b in [(self.ymin,ymin),(self.ymax,ymax)]):
-        LOG.warning("Plot.setaxes: y axis range changed: [ymin,ymax] = [%.6g,%.6g] -> [%.6g,%.6g]"%(
+        LOG.warning("Plot.setaxes: y axis range changed: [ymin,ymax] = [%6.6g,%6.6g] -> [%6.6g,%6.6g]"%(
                     self.ymin,self.ymax,ymin,ymax))
       self.xmin, self.xmax = xmin, xmax
       self.ymin, self.ymax = ymin, ymax
@@ -611,7 +622,7 @@ class Plot(object):
         styles.append(style)
       elif hasattr(hist,'GetFillStyle') and hist.GetFillStyle()>0:
         styles.append('f')
-      elif 'E0' in hist.GetOption():
+      elif 'E0' in hist.GetOption() or 'E1' in hist.GetOption():
         styles.append(errstyle)
       else:
         styles.append('lp')

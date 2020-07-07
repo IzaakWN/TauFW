@@ -1,6 +1,7 @@
 {
   "channels": {
     "skim": "skimjob.py", 
+    "skim-jec": "skimjob.py --jec-sys",
     "gen": "GenDumper", 
     "mutau": "ModuleMuTauSimple"
   }, 
@@ -9,7 +10,6 @@
     "2017": "examples/samples_2017.py", 
     "2018": "examples/samples_2018.py"
   }, 
-  "batch": "HTCondor", 
   "nfilesperjob": 1, 
   "filelistdir": "samples/files/$ERA/$SAMPLE.txt", 
   "jobdir": "output/$ERA/$CHANNEL/$SAMPLE"

@@ -32,6 +32,10 @@ def bold(string):
   return "\033[1m%s\033[0m"%(string)
   
 
+def underlined(string):
+  return "\033[4m%s\033[0m"%(string)
+  
+
 #_headeri = 0
 def header(*strings):
   #global _headeri
@@ -61,13 +65,17 @@ class Logger(object):
     verbs = [ self.verbosity ]
     for arg in args:
       if isinstance(arg,dict):
-        verbosity = arg.get('verb',0) + arg.get('verbosity',0) + 0
+        verbosity = arg.get('verb',0) + arg.get('verbosity',0)
       elif hasattr(arg,'verbosity'):
         verbosity = arg.verbosity
       else:
         verbosity = int(bool(arg) or 0)
       verbs.append(verbosity)
     return max(verbs)
+  
+  def setverbosity(self,*args):
+    """Set own verbosity based with getverbosity."""
+    self.verbosity = self.getverbosity(*args)
   
   def info(self,string,**kwargs):
     """Info"""
@@ -76,11 +84,13 @@ class Logger(object):
   def verbose(self,string,verb=None,level=1,**kwargs):
     """Check verbosity and print if verbosity level is matched."""
     if verb==None:
-      verb   = self.verbosity
+      verb = self.verbosity
+    elif isinstance(verb,dict):
+      verb = self.getverbosity(verb)
     if verb>=level:
-      pre = self.pre+kwargs.get('pre',"")
-      col = kwargs.get('c',False)
-      col = kwargs.get('color',col)
+      pre  = self.pre+kwargs.get('pre',"")
+      col  = kwargs.get('c',False)
+      col  = kwargs.get('color',col)
       if col:
         string = color(string,col) if isinstance(col,str) else color(string)
       print pre+string
