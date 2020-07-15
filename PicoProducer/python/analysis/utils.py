@@ -1,32 +1,20 @@
 # Author: Izaak Neutelings (May 2020)
 import os, sys
-import traceback
-import importlib
 from math import sqrt, sin, cos, pi
 from itertools import combinations
 from ROOT import TH1D, TLorentzVector
 from TauFW.PicoProducer import basedir
 from TauFW.common.tools.utils import convertstr # for picojob.py
 from TauFW.common.tools.file import ensurefile
+from TauFW.common.tools.file import ensuremodule as _ensuremodule
 from TauFW.common.tools.log import Logger
-from PhysicsTools.NanoAODTools.postprocessing.framework.datamodel import Collection
+from PhysicsTools.NanoAODTools.postprocessing.framework.datamodel import Collection, Event
 LOG = Logger('Analysis')
 
 
 def ensuremodule(modname):
   """Check if module exists and has class of same name."""
-  # TODO: absolute path
-  modfile  = ensurefile(basedir,"python/analysis/%s.py"%(modname.replace('.','/')))
-  modpath  = "TauFW.PicoProducer.analysis.%s"%(modname) #modfile.replace('.py','').replace('/','.')
-  modclass = modname.split('.')[-1]
-  try:
-    module = importlib.import_module(modpath)
-  except Exception as err:
-    print traceback.format_exc()
-    LOG.throw(ImportError,"Importing module '%s' failed. Please check %s! cwd=%r"%(modpath,modfile,os.getcwd()))
-  if not hasattr(module,modclass):
-    LOG.throw(IOError,"Module '%s' in %s does not have a module named '%s'!"%(module,modfile,modname))
-  return module
+  return _ensuremodule(modname,"PicoProducer.analysis")
   
 
 def getmodule(modname):
@@ -34,6 +22,31 @@ def getmodule(modname):
   module   = ensuremodule(modname)
   modclass = modname.split('.')[-1]
   return getattr(module,modclass)
+  
+
+def ensurebranches(tree,branches):
+  """Check if these branches are available in the tree branch list,
+  if not, redirect them."""
+  if tree.GetEntries()<1:
+    print "WARNING! Empty tree!"
+    return
+  fullbranchlist = tree.GetListOfBranches()
+  for b in fullbranchlist:
+    if 'MET' in b:
+      print b
+  for newbranch, oldbranch in branches:
+    if newbranch not in fullbranchlist:
+      redirectbranch(oldbranch,newbranch)
+  
+
+def redirectbranch(oldbranch,newbranch):
+  """Redirect some branch names. newbranch -> oldbranch"""
+  if isinstance(oldbranch,str): # rename
+    print "redirectbranch: directing %r -> %r"%(newbranch,oldbranch)
+    exec "setattr(Event,newbranch,property(lambda self: self._tree.readBranch(%r)))"%(oldbranch)
+  else: # set default
+    print "redirectbranch: directing %r -> %r"%(newbranch,oldbranch)
+    exec "setattr(Event,newbranch,%s)"%(oldbranch)  
   
 
 def hasbit(value,bit):

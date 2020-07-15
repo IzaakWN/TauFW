@@ -16,7 +16,9 @@ var_dict = {
     'jphi_2':      "Leading b jet phi",       'bphi_2':      "Subleading b jet phi",
     'met':         "p_{T}^{miss}",
     'metphi':      "MET phi",
-    'mt_1':        "m_t(l,MET)",
+    'pt_1':        "Lepton pt",               'pt_2':        "tau_h pt",
+    'eta_1':       "Lepton eta",              'eta_2':       "tau_h eta",
+    'mt_1':        "m_t(l,MET)",              'mt_2':        "m_t(tau,MET)",
     'dzeta':       "D_{zeta}",
     'pzetavis':    "p_{zeta}^{vis}",
     'pzetamiss':   "p_{zeta}^{miss}",
@@ -37,10 +39,11 @@ def makelatex(string,**kwargs):
     return string
   if string and string[0]=='{' and string[-1]=='}':
     return string[1:-1]
-  units = kwargs.get('units', True  )
-  split = kwargs.get('split', False )
-  GeV   = False
-  cm    = False
+  units  = kwargs.get('units', True  )
+  split  = kwargs.get('split', False )
+  GeV    = False
+  cm     = False
+  oldstr = string
   
   # PREDEFINED
   if len(var_dict_sorted)!=len(var_dict):
@@ -71,10 +74,11 @@ def makelatex(string,**kwargs):
     string = ' / '.join(makelatex(s,**kwargs) for s in string.split(' / '))
   elif match:
     kwargs['units'] = False
+    func   = makelatex(match.group(1),**kwargs)
     arg1   = makelatex(match.group(2),**kwargs)
     arg2   = makelatex(match.group(3),**kwargs)
     old    = "%s(%s,%s)"%(match.group(1),match.group(2),match.group(3))
-    new    = "%s(%s,%s)"%(match.group(1),arg1,arg2)
+    new    = "%s(%s,%s)"%(func,arg1,arg2)
     string = string.replace(old,new)
     #print ">>> %r -> %r, %r -> %r, %r -> %r, %r"%(match.group(2),arg1,match.group(3),arg2,old,new,string)
   elif '+' in string:
@@ -89,6 +93,8 @@ def makelatex(string,**kwargs):
       string = re.sub(r"(?<!k)(?<!Dee)(?<!OverTau)(p)[tT]_([^{}()|<>=\ ]+)",r"\1_{T}^{\2}",string,flags=re.IGNORECASE)
       string = re.sub(r"\b(?<!Dee)(p)[tT]\b",r"\1_{T}",string,flags=re.IGNORECASE)
       GeV    = True
+    if strlow.strip()=="mt":
+      string = re.sub(r"(m)(t)",r"\1_{T}",string,flags=re.IGNORECASE)
     if "m_" in strlow:
       string = re.sub(r"(?<!u)(m)_([^{}()|<>=\ \^]+)",r"\1_{\2}",string,flags=re.IGNORECASE).replace('{t}','{T}')
       GeV    = True
@@ -161,14 +167,15 @@ def makelatex(string,**kwargs):
     else:
       string += " [%s]"%units.strip()
   elif units and not '/' in string:
-    if GeV or "mass" in string or "S_{T}" in string or (any(m in string.lower() for m in ["met","p_{T}^{miss}"]) and "phi" not in string):
+    if GeV or "mass" in string or "p_{T}" in string or "S_{T}" in string or (any(m in string.lower() for m in ["met","p_{t}^{miss}"]) and "phi" not in string):
       if "GeV" not in string:
         string += " [GeV]"
       if cm:
         LOG.warning("makelatex: Flagged units are both GeV and cm!")
     elif cm: #or 'd_' in string
       string += " [cm]"
-  
+  if (verbosity>=2 and string!=oldstr) or verbosity>=3:
+    print ">>> makelatex: %r -> %r"%(oldstr,string)
   return string
   
 
@@ -183,7 +190,7 @@ def maketitle(title,**kwargs):
 
 def makehistname(*labels,**kwargs):
   """Use label and var to make an unique and valid histogram name."""
-  hname = '_'.join(labels)
+  hname = '_'.join(s.strip('_') for s in labels)
   hname = hname.replace('+','-').replace(' - ','-').replace('.','p').replace(',','-').replace(' ','_').replace(
                         '(','-').replace(')','-').replace('[','-').replace(']','-').replace('||','OR').replace('&&','AND').replace(
                         '/','_').replace('<','lt').replace('>','gt').replace('=','e').replace('*','x')
@@ -280,4 +287,35 @@ def shiftjetvars(var, jshift, **kwargs):
     print '>>>   "%s"'%var
     print '>>>    -> "%s"'%jshift
   return varshift
+  
+
+doubleboolrexp = re.compile(r"(?:&&|\|\|) *(?:&&|\|\|)")
+def cleanbool(string):
+  """Clean boolean operators."""
+  return doubleboolrexp.sub(r"&&",string).strip(' ').strip('&').strip(' ')
+  
+
+def invertcharge(oldcuts,target='SS',**kwargs):
+  """Help function to find, invert and replace charge selections."""
+  verbosity = LOG.getverbosity(kwargs)
+  newcuts   = oldcuts
+  if oldcuts=="":
+    newcuts = "q_1*q_2<0" if target=='OS' else "q_1*q_2>0" if target=='OS' else ""
+  else:
+    matchOS = re.findall(r"q_[12]\s*\*\s*q_[12]\s*<\s*0",oldcuts)
+    matchSS = re.findall(r"q_[12]\s*\*\s*q_[12]\s*>\s*0",oldcuts)
+    LOG.verbose("invertcharge: oldcuts=%r"%(oldcuts),verbosity,2)
+    LOG.verbose("invertcharge: matchOS=%r, matchSS=%r"%(matchOS,matchSS),verbosity,2)
+    if (len(matchOS)+len(matchSS))>1:
+      LOG.warning('invertcharge: more than one charge match (%d OS, %d SS) in "%s"'%(len(matchOS),len(matchSS),oldcuts))
+    if target=='OS':
+      for match in matchSS: newcuts = oldcuts.replace(match,"q_1*q_2<0") # invert SS to OS
+    elif target=='SS':
+      for match in matchOS: newcuts = oldcuts.replace(match,"q_1*q_2>0") # invert OS to SS
+    else:
+      for match in matchOS: newcuts = oldcuts.replace(match,"") # REMOVE
+      for match in matchSS: newcuts = oldcuts.replace(match,"") # REMOVE
+    newcuts = cleanbool(newcuts)
+  LOG.verbose('  %r\n>>>   -> %r %s\n>>>'%(oldcuts,newcuts,target),verbosity,2)
+  return newcuts
   

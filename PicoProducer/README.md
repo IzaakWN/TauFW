@@ -37,7 +37,7 @@ You can link several skimming or analysis codes to _channels_.
 
 ## Installation
 
-You need to have CMSSW and [NanoAODTools](https://github.com/cms-nanoAOD/nanoAOD-tools) installed,
+You need to have CMSSW and [`NanoAODTools`](https://github.com/cms-nanoAOD/nanoAOD-tools) installed,
 see the [README in the parent directory](../../../#taufw). Test the installation with
 ```
 pico.py --help
@@ -106,7 +106,7 @@ pico.py channel skimjec 'skimjob.py --jec-sys'
 
 
 ### Analysis
-This framework allows to implement many analysis modules called channels
+This framework allows to implement many analysis modules called "channels"
 (e.g. different final states like mutau or etau).
 All analysis code should be saved in [`python/analysis/`](python/analysis), or a subdirectory.
 A simple example of an analysis is given in [`ModuleMuTauSimple.py`](python/analysis/ModuleMuTauSimple.py),
@@ -154,7 +154,7 @@ Other optional keyword arguments are
   Note that this path is used for both skimming and analysis jobs.
   This is useful if you have produced or skimmed your NanoAOD samples, and they are not available via DAS.
   The path may contain variables like `$PATH` for the full DAS path, `$GROUP` for the group, `$SAMPLE` for the sample short name.
-* `url`: Redirector URL for XRootD protocol, e.g. `root://cms-xrd-global.cern.ch` for DAS.
+* `url`: Redirector URL for `XRootD` protocol, e.g. `root://cms-xrd-global.cern.ch` for DAS.
 * `files`: Either a list of nanoAOD files, OR a string to a text file with a list of nanoAOD files.
   This can speed things up if DAS is slow or unreliable,
   or you want to avoid retrieving the files from a local storage element on the fly each time.
@@ -276,7 +276,7 @@ This framework might not work for your computing system... yet.
 It was created with a modular design in mind, meaning that users can add their own
 "plug-in" modules to make it work with their own batch system and storage system.
 If you like to contribute, please make sure the changes run as expected,
-push the changes to a fork and make a pull request.
+and then push the changes to a fork to make a pull request.
 
 ### Batch system
 To plug in your own batch system, make a subclass of [`BatchSystem`](python/batch/BatchSystem.py),
@@ -285,15 +285,16 @@ Your subclass has to be saved in separate python module in [`python/batch/`](pyt
 and the module's filename should be the same as the class.
 See for example [`HTCondor.py`](python/batch/HTCondor.py).
 If you need extra (shell) scripts, leave them in `python/batch` as well.
-Then you need to add your `submit` command to the `main_submit` function in
-[`pico.py`](https://github.com/cms-tau-pog/TauFW/blob/9c3addaa1cd09cf4f866d279e4fa53a328f4997b/PicoProducer/scripts/pico.py#L973-L985).
+Then you need to implement your `submit` command to the `main_submit` function in
+[`pico.py`](https://github.com/cms-tau-pog/TauFW/blob/b4d14574226b095d020936eb54c3d8bb995624d3/PicoProducer/scripts/pico.py#L1007-L1030),
+where you define the script and some extra keyword options via `jkwargs`, for example:
 ```
 def main_submit(args):
   ...
     elif batch.system=='SLURM':
       script  = "python/batch/submit_SLURM.sh %s"%(joblist)
-      logfile = os.path.join(logdir,"%x.%A.%a")
-      jobid   = batch.submit(script,name=jobname,log=logfile,dry=dryrun,...)
+      logfile = os.path.join(logdir,"%x.%A.%a") # $JOBNAME.o$JOBID.$TASKID
+      jkwargs.update({'log': logfile })
   ...
 ```
 
@@ -311,6 +312,12 @@ def getstorage(path,verb=0,ensure=False):
   ...
   return storage
 ```
+You can test your implementation with
+<pre>
+test/testStorage.py <i>&lt;path&gt;</i> -v3
+</pre>
+where you pass an absolute path on your storage system. 
+
 If you want, you can also add the path of your storage element to `getsedir` in the same file.
 This help function automatically sets the default paths for new users, based on the host and user name.
 

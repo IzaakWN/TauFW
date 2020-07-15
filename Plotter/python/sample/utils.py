@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # Author: Izaak Neutelings (June 2020)
-import re
-from TauFW.common.tools.utils import isnumber, islist, ensurelist, unwraplistargs
-from TauFW.common.tools.file import ensuredir, ensureTFile
+import re, glob
+from TauFW.common.tools.utils import isnumber, islist, ensurelist, unwraplistargs, repkey
+from TauFW.common.tools.file import ensuredir, ensureTFile, ensuremodule
 from TauFW.common.tools.log import Logger, color
-from TauFW.Plotter.plot.Variable import Variable, ensurevar
+from TauFW.Plotter.plot.Variable import Variable, Var, ensurevar
 import TauFW.Plotter.plot.CMSStyle as CMSStyle
 import ROOT; ROOT.PyConfig.IgnoreCommandLineOptions = True
 from ROOT import gDirectory, gROOT, TH1, THStack, kDotted, kBlack, kWhite
@@ -23,9 +23,84 @@ lumi_dict      = {
 xsecs_nlo = { # NLO cross sections to compute k-factor for stitching
   'DYJetsToLL_M-50':     3*2025.74,
   'DYJetsToLL_M-10to50':  18610.0,
-  'WJetsToLL':            61526.7,
+  'WJetsToLNu':           61526.7,
 }
 
+
+def getsampleset(datasample,expsamples,sigsamples=[ ],**kwargs):
+  """Create sample set from a table of data and MC samples."""
+  channel    = kwargs.get('channel',    ""   )
+  era        = kwargs.get('era',        ""   )
+  fpattern   = kwargs.get('file',       None )
+  weight     = kwargs.pop('weight',     ""   )
+  dataweight = kwargs.pop('dataweight', ""   )
+  url        = kwargs.pop('url',        ""   ) # XRootD url
+  
+  if not fpattern:
+    fpattern = "$PICODIR/$SAMPLE_$CHANNEL.root"
+  if '$PICODIR' in fpattern:
+    import TauFW.PicoProducer.tools.config as GLOB
+    CONFIG   = GLOB.getconfig(verb=0)
+    picodir  = CONFIG['picodir']
+    fpattern = repkey(fpattern,PICODIR=picodir)
+  if url:
+    fpattern = "%s/%s"%(fpattern,url)
+  LOG.verb("getsampleset: fpattern=%r"%(fpattern),level=1)
+  
+  # MC (EXPECTED)
+  for i, info in enumerate(expsamples[:]):
+    expkwargs = kwargs.copy()
+    expkwargs['weight'] = weight
+    if len(info)==4:
+      group, name, title, xsec = info
+    elif len(info)==5 and isinstance(info[4],dict):
+      group, name, title, xsec, newkwargs = info
+      expkwargs.update(newkwargs)
+    else:
+      LOG.throw(IOError,"Did not recognize mc row %s"%(info))
+    fname = repkey(fpattern,ERA=era,GROUP=group,SAMPLE=name,CHANNEL=channel)
+    #print fname
+    sample = MC(name,title,fname,xsec,**expkwargs)
+    expsamples[i] = sample
+  
+  # DATA (OBSERVED)
+  title = 'Observed'
+  datakwargs = kwargs.copy()
+  datakwargs['weight'] = dataweight
+  if isinstance(datasample,dict) and channel:
+    datasample = datasample[channel]
+  if len(datasample)==2:
+    group, name = datasample
+  elif len(datasample)==3:
+    group, name = datasample[:2]
+    if isinstance(datasample[2],dict): # dictionary
+      datakwargs.update(datasample[2])
+    else: # string
+      title = datasample[2]
+  elif len(datasample)==4 and isinstance(datasample[3],dict):
+    group, name, title, newkwargs = datasample
+    datakwargs.update(newkwargs)
+  else:
+    LOG.throw(IOError,"Did not recognize data row %s"%(datasample))
+  fnames   = glob.glob(repkey(fpattern,ERA=era,GROUP=group,SAMPLE=name,CHANNEL=channel))
+  #print fnames
+  if len(fnames)==1:
+    datasample = Data(name,title,fnames)
+  elif len(fnames)>1:
+    namerexp = re.compile(name.replace('?','.').replace('*','.*'))
+    name     = name.replace('?','').replace('*','')
+    datasample = MergedSample(name,'Observed',data=True)
+    for fname in fnames:
+      setname = namerexp.findall(fname)[0]
+      #print setname
+      datasample.add(Data(setname,'Observed',fname,**datakwargs))
+  else:
+    LOG.throw(IOError,"Did not find data file %r"%(fnames))
+  
+  # SAMPLE SET
+  sampleset = SampleSet(datasample,expsamples,sigsamples,**kwargs)
+  return sampleset
+  
 
 def setera(era_,lumi_=None,**kwargs):
   """Set global era and integrated luminosity for Samples and CMSStyle."""
@@ -38,12 +113,21 @@ def setera(era_,lumi_=None,**kwargs):
     kwargs['lumi'] = lumi
   cme  = kwargs.get('cme', 13 )
   CMSStyle.setCMSEra(era,**kwargs)
-  LOG.verb("setera: era = %r, lumi = %r / fb, cme = %r TeV"%(era,lumi,cme),kwargs,2)
+  LOG.verb("setera: era = %r, lumi = %r/fb, cme = %r TeV"%(era,lumi,cme),kwargs,2)
   return lumi
   
 
 def unwrap_MergedSamples_args(*args,**kwargs):
-  """Help function to unwrap arguments for MergedSamples."""
+  """
+  Help function to unwrap arguments for MergedSamples initialization:
+    - MergedSample(str name)
+    - MergedSample(str name, str title)
+    - MergedSample(str name, list samples)
+    - MergedSample(str name, str title, list samples)
+  where samples is a list of Sample objects.
+  Returns a sample name, title and a list of Sample objects:
+    (str name, str, title, list samples)
+  """
   strings = [ ]
   name    = "noname"
   title   = "No title"
@@ -68,14 +152,19 @@ def unwrap_MergedSamples_args(*args,**kwargs):
   
 
 def unwrap_gethist_args(*args,**kwargs):
-  """Help function to unwrap argument list that contain variable(s) and selection:
-     - variable, cuts
-     - varlist, cuts
-     where variable can be
-     - xvar, nxbins, xmin, xmax (str, int, float, float)
-     - xvar, xbins (str, list)
-     - var (Variable)
-     or valist is a list of such variables.
+  """
+  Help function to unwrap argument list that contain variable(s) and selection:
+    - gethist(str xvar, int nxbins, float xmin, float xmax, str cuts)
+    - gethist(str xvar, list xbins, str cuts)
+    - gethist(Variable xvar, str cuts)
+    - gethist(list varlist, str cuts)
+  where varlist is a list of Variables objects, or a list of tuples defining a variable:
+    - [(str xvar, int nxbins, float xmin, float xmax), ... ]
+    - [(str xvar, list xbins), ... ]
+  Returns a list of Variable objects, a selection string, and a boolean to flag a single
+  instead of a list of variables was given:
+    (list vars, str cut, bool single)
+  For testing, see test/testUnwrapping.py.
   """
   vars   = None  # list of Variable objects
   sel    = None  # selection (string)
@@ -89,7 +178,7 @@ def unwrap_gethist_args(*args,**kwargs):
     elif islist(args[0]):
       vars = [ensurevar(v) for v in args[0]]
   elif len(args) in [3,5]:
-    vars   = [Variable(*args[len(args)-1])]
+    vars   = [Variable(*args[:len(args)-1])]
     sel    = args[-1]
     single = True
   if vars==None or sel==None:
@@ -98,21 +187,37 @@ def unwrap_gethist_args(*args,**kwargs):
   return vars, sel, single
   
 
-def unwrap_gethist_args_2D(*args,**kwargs):
-  """Help function to unwrap argument list that contain variable(s) and selection:
-     - xvar, yvar, cuts
-     - xvarlist, yvarlist, cuts
-     - (xvar,yvar), cuts
-     - varlist, cuts
-     - xvar, nxbins, xmin, xmax, yvar, nybins, ymin, ymax, cuts
-     where xvar and yvar are Variable objects or arguments, and [xy]varlist is a list of such pairs.
+def unwrap_gethist2D_args(*args,**kwargs):
+  """
+  Help function to unwrap argument list that contain variable pair(s) and selection:
+    - gethist2D(str xvar, int nxbins, float xmin, float xmax, str yvar, int nybins, float ymin, float ymax, str cuts)
+    - gethist2D(str xvar, list xbins, str yvar, list ybins, str cuts)
+    - gethist2D(Variable xvar, Variable yvar, str cuts)
+    - gethist2D(tuple xvar, tuple yvar, str cuts)
+    - gethist2D(list xvarlist, list yvarlist, str cuts)
+    - gethist2D(list varlist, str cuts)
+    - gethist2D(tuple varpair, str cuts)
+  where the tuples xvar and yvar can be
+    – (str xvar, int nxbins, float xmin, float xmax)
+    – (str xvar, list xbins)
+  and the [xy]varlist is a list of Variables object pairs,
+    - [(Variable xvar,Variable yvar), ... ]
+  or a list of tuples defining a variable:
+    - [(str xvar, int nxbins, float xmin, float xmax, str yvar, int nybins, float ymin, float ymax), ...]
+    - [(str xvar, list xbins), ...]
+  and varpair is tuple of a single pair of Variable objects:
+    - (Variable xvar,Variable yvar)
+  Returns a list of Variable pairs, a selection string, and a boolean to flag a single
+  instead of a list of variables was given:
+    (list varpairs, str cut, bool single)
+  For testing, see test/testUnwrapping.py.
   """
   vars   = None  # list of Variable objects
   sel    = None  # selection (string)
   single = False # only one pair of Variable objects passed
   if len(args)==2:
     vars, sel = args
-    single = len(vars)==2 and islist(vars) and isinstance(vars[0],Variable) and isinstance(vars[1],Variable)
+    single = len(vars)==2 and islist(vars) and all(isinstance(v,Variable) for v in vars)
     if single:
       vars = [vars]
   elif len(args)==3:
@@ -120,182 +225,237 @@ def unwrap_gethist_args_2D(*args,**kwargs):
     if isinstance(xvars,Variable) and isinstance(yvars,Variable):
       vars = [(xvars,yvars)]
       single = True
-    elif all(isinstance(v,Variable) for v in xvars+yvars):
+    elif all(isinstance(v,Variable) for v in xvars+yvars): # assume list
       vars = zip(xvars,yvars)
-    elif len(xvars) in [3,5] and len(yvars) in [3,5]:
+    elif len(xvars) in [2,4] and len(yvars) in [2,4] and isinstance(xvars[0],str) and isinstance(yvars[0],str):
       vars = [Variable(*xvars),Variable(*yvars)]
       single = True
+    elif islist(xvars) and islist(yvars) and all(islist(x) for x in xvars) and all(islist(y) for y in yvars):
+      vars = [(Variable(*x),Variable(*y)) for x, y in zip(xvars,yvars)]
+  elif len(args)==5:
+    vars   = [(Variable(*args[0:2]),Variable(*args[2:4]))]
+    sel    = args[-1]
+    single = True
   elif len(args)==9:
-    vars   = [Variable(*args[0:4]),Variable(*args[4:8])]
+    vars   = [(Variable(*args[0:4]),Variable(*args[4:8]))]
     sel    = args[-1]
     single = True
   if vars==None or sel==None:
-    LOG.throw(IOError,'unwrap_gethist_args_2D: Could not unwrap arguments %s, len(args)=%d, vars=%s, sel=%s.'%(args,len(args),vars,sel))
-  LOG.verb("unwrap_gethist_args_2D: vars=%s, sel=%r, single=%r"%(vars,sel,single),level=3)
+    LOG.throw(IOError,'unwrap_gethist2D_args: Could not unwrap arguments %s, len(args)=%d, vars=%s, sel=%s.'%(args,len(args),vars,sel))
+  LOG.verb("unwrap_gethist2D_args: vars=%s, sel=%r, single=%r"%(vars,sel,single),level=3)
   return vars, sel, single
   
 
-#def join(sampleList,*searchterms,**kwargs):
-#  """Merge samples from a sample list, that match a set of search terms."""
-#  from Sample import MergedSample, SampleSet
-#  
-#  verbosity = LOG.getverbosity(kwargs,1)
-#  name0     = kwargs.get('name',  searchterms[0] )
-#  title0    = kwargs.get('title', name0          )
-#  color0    = kwargs.get('color', None           )
-#  LOG.verbose("",verbosity,level=2)
-#  LOG.verbose(" merging %s"%(name0),verbosity,level=1)
-#  
-#  # GET samples containing names and searchterm
-#  mergeList = [ s for s in sampleList if s.isPartOf(*searchterms,exclusive=False) ]
-#  if len(mergeList) < 2:
-#    LOG.warning('Could not merge "%s": less than two "%s" samples (%d)'%(name0,name0,len(mergeList)))
-#    return sampleList
-#  fill = max([ len(s.name) for s in mergeList ])+2 # number of spaces
-#  
-#  # ADD samples with name0 and searchterm
-#  mergedsample = MergedSample(name0,title0,color=color0)
-#  for sample in mergeList:
-#    samplename = ('"%s"'%(sample.name)).ljust(fill)
-#    LOG.verbose("   merging %s to %s: %s"%(samplename,name0,sample.filenameshort),verbosity,level=2)
-#    mergedsample.add(sample)
-#  
-#  # REMOVE replace merged samples from sampleList, preserving the order
-#  if mergedsample.samples and sampleList:
-#    if isinstance(sampleList,SampleSet):
-#      sampleList.replaceMergedSamples(mergedsample)
-#    else:
-#      index0 = len(sampleList)
-#      for sample in mergedsample.samples:
-#        index = sampleList.index(sample)
-#        if index<index0: index0 = index
-#        sampleList.remove(sample)
-#      sampleList.insert(index,mergedsample)
-#  return sampleList
+def getsample(samples,*searchterms,**kwargs):
+  """Help function to get all samples corresponding to some name and optional label."""
+  verbosity   = LOG.getverbosity(kwargs)
+  filename    = kwargs.get('filename', ""    )
+  unique      = kwargs.get('unique',   False )
+  warning     = kwargs.get('warning',  True  )
+  inclusive   = kwargs.get('incl',     True  )
+  matches     = [ ]
+  for sample in samples:
+    if sample.match(*searchterms,incl=inclusive) and filename in sample.filename:
+      matches.append(sample)
+  if not matches and warning:
+    LOG.warning("getsample: Could not find a sample with search terms %s..."%(', '.join(searchterms+(filename,))))
+  elif unique:
+    if len(matches)>1:
+      LOG.warning("getsample: Found more than one match to %s. Using first match only: %s"%(", ".join(searchterms),", ".join([s.name for s in matches])))
+    return matches[0]
+  return matches
   
 
-#def stitch(sampleList,*searchterms,**kwargs):
-#  """Stitching samples: merge samples and reweight inclusive
-#  sample and rescale jet-binned samples."""
-#  verbosity         = LOG.getverbosity(kwargs,1)
-#  name0             = kwargs.get('name',      searchterms[0]  )
-#  title0            = kwargs.get('title',     ""              )
-#  name_incl         = kwargs.get('name_incl', name0           )
-#  npartons          = kwargs.get('npartons',  'NUP'           ) # variable name of number of partons
-#  LOG.verbose("",verbosity,level=2)
-#  LOG.verbose(" stiching %s: rescale, reweight and merge samples"%(name0),verbosity,level=1)
-#  
-#  # CHECK if sample list of contains to-be-stitched-sample
-#  stitchList = sampleList.samples if isinstance(sampleList,SampleSet) else sampleList
-#  stitchList = [ s for s in stitchList if s.isPartOf(*searchterms) ]
-#  if len(stitchList) < 2:
-#    LOG.warning("stitch: Could not stitch %s: less than two %s samples (%d)"%(name0,name0,len(stitchList)))
-#    for s in stitchList: print ">>>   %s"%s.name
-#    if len(stitchList)==0: return sampleList
-#  fill = max([ len(s.name) for s in stitchList ])+2
-#  name = kwargs.get('name',stitchList[0].name)
-#  
-#  # FIND inclusive sample
-#  sample_incls = [s for s in stitchList if s.isPartOf(name_incl)]
-#  if len(sample_incls)==0: LOG.error('stitch: Could not find inclusive sample "%s"!'%(name0))
-#  if len(sample_incls) >1: LOG.error('stitch: Found more than one inclusive sample "%s"!'%(name0))
-#  sample_incl = sample_incls[0]
-#  
-#  # k-factor
-#  N_incl         = sample_incl.sumweights
-#  weights        = [ ]
-#  xsec_incl_LO  = sample_incl.xsec
-#  xsec_incl_NLO = crossSectionsNLO(name0,*searchterms)
-#  kfactor        = xsec_incl_NLO / xsec_incl_LO
-#  norm0          = -1
-#  maxNUP         = -1
-#  LOG.verbose("   %s k-factor = %.2f = %.2f / %.2f"%(name0,kfactor,xsec_incl_NLO,xsec_incl_LO),verbosity,level=2)
-#  
-#  # SET renormalization scales with effective luminosity
-#  # assume first sample in the list s the inclusive sample
-#  for sample in stitchList:
-#    N_tot = sample.sumweights
-#    N_eff = N_tot
-#    xsec = sample.xsec # inclusive or jet-binned cross section
-#    if sample.isPartOf(name_incl):
-#      NUP = 0
-#    else:
-#      N_eff = N_tot + N_incl*xsec/xsec_incl_LO # effective luminosity    
-#      matches = re.findall("(\d+)Jets",sample.filenameshort)
-#      LOG.verbose('   %s: N_eff = N_tot + N_incl * xsec / xsec_incl_LO = %.1f + %.1f * %.2f / %.2f = %.2f'%\
-#                     (sample.name,N_tot,N_incl,xsec,xsec_incl_LO,N_eff),verbosity,2)
-#      if len(matches)==0: LOG.error('stitch: Could not stitch "%s": could not find right NUP for "%s"!'%(name0,sample.name))
-#      if len(matches)>1:  LOG.warning('stitch: More than one "\\d+Jets" match for "%s"! matches = %s'%(sample.name,matches))
-#      NUP = int(matches[0])
-#    norm = sample.lumi * kfactor * xsec * 1000 / N_eff
-#    if NUP==0:     norm0 = norm
-#    if NUP>maxNUP: maxNUP = NUP
-#    weights.append("(NUP==%i ? %s : 1)"%(NUP,norm))
-#    LOG.verbose('   %s, NUP==%d: norm = luminosity * kfactor * xsec * 1000 / N_eff = %.2f * %.2f * %.2f * 1000 / %.2f = %.2f'%\
-#                    (name0,NUP,sample.lumi,kfactor,xsec,N_eff,norm),verbosity,2)
-#    LOG.verbose("   stitching %s with normalization %7.3f and cross section %8.2f pb"%(sample.name.ljust(fill), norm, xsec),verbosity,2)
-#    #print ">>> weight.append(%s)"%weights[-1]
-#    sample.norm = norm # apply lumi-cross section normalization
-#    if len(stitchList)==1: return sampleList
-#  
-#  # ADD weights for NUP > maxNUP
-#  if norm0>0 and maxNUP>0:
-#    weights.append("(NUP>%i ? %s : 1)"%(maxNUP,norm0))
-#  else:
-#    LOG.warning("   found no weight for NUP==0 (%.1f) or no maximum NUP (%d)..."%(norm0,maxNUP))
-#  
-#  # SET weight of inclusive sample
-#  sample_incl.norm = 1.0 # apply lumi-cross section normalization via weights
-#  stitchweights    = '*'.join(weights)
-#  if npartons!='NUP':
-#    stitchweights  = stitchweights.replace('NUP',npartons)
-#  LOG.verbose("   stitch weights = %s"%(stitchweights),verbosity,4)
-#  sample_incl.addWeight(stitchweights)
-#  if not title0: title0 = sample_incl.title
-#  
-#  # MERGE
-#  join(sampleList,name0,*searchterms,title=title0,verbosity=verbosity)
-#  return sampleList
+def getsample_with_flag(samples,flag,*searchterms,**kwargs):
+  """Help function to get sample with some flag from a list of samples."""
+  matches   = [ ]
+  inclusive = kwargs.get('incl',   True  )
+  unique    = kwargs.get('unique', False )
+  for sample in samples:
+    if hasattr(sample,flag) and getattr(sample,flag) and\
+       (not searchterms or sample.match(*searchterms,incl=inclusive)):
+      matches.append(sample)
+  if not matches:
+    LOG.warning("Could not find a signal sample...")
+  elif unique:
+    if len(matches)>1:
+      LOG.warning("Found more than one signal sample. Using first match only: %s"%(", ".join([s.name for s in matches])))
+    return matches[0]
+  return matches
   
 
-#def crossSectionsNLO(*searchterms,**kwargs):
-#  """Returns inclusive (N)NLO cross section for stitching og DY and WJ."""
-#  # see /shome/ytakahas/work/TauTau/SFrameAnalysis/TauTauResonances/plot/config.py
-#  # https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV#List_of_processes
-#  # https://ineuteli.web.cern.ch/ineuteli/crosssections/2017/FEWZ/
-#  # DY cross sections  5765.4 [  4954.0, 1012.5,  332.8, 101.8,  54.8 ]
-#  # WJ cross sections 61526.7 [ 50380.0, 9644.5, 3144.5, 954.8, 485.6 ]
-#  from Sample import Sample
-#  isDY          = False
-#  isDY_M10to50  = ""
-#  isDY_M50      = ""
-#  isWJ          = False
-#  for searchterm in searchterms:
-#    searchterm = searchterm.replace('*','')
-#    if "DY" in searchterm:
-#      isDY = True
-#    if "10to50" in searchterm:
-#      isDY_M10to50 = "M-10to50"
-#    if "50" in searchterm and not "10" in searchterm:
-#      isDY_M50 = "M-50"
-#    if "WJ" in searchterm:
-#      isWJ = True
-#  if isDY and isWJ:
-#    LOG.error("crossSections - Detected both isDY and isWJ!")
-#    exit(1)
-#  elif isWJ:
-#    return xsecsNLO['WJ']
-#  elif isDY:
-#    if isDY_M10to50 and isDY_M50:
-#      LOG.error('crossSections - Matched to both "M-10to50" and "M-50"!')
-#      exit(1)
-#    if not (isDY_M10to50 or isDY_M50):
-#      LOG.error('crossSections - Did not match to either "M-10to50" or "M-50" for DY!')
-#      exit(1)
-#    return xsecsNLO['DY'][isDY_M10to50+isDY_M50]
-#  else:
-#    LOG.error("crossSections - Did not find a DY or WJ match!")
-#    exit(1)
+def join(samplelist,*searchterms,**kwargs):
+  """Join samples from a sample list into one merged sample, that match a set of search terms.
+  E.g. samplelist = join(samplelist,'DY','M-50',name='DY_highmass')."""
+  verbosity = LOG.getverbosity(kwargs,1)
+  name      = kwargs.get('name',  searchterms[0] ) # name of new merged sample
+  title     = kwargs.get('title', None           ) # title of new merged sample
+  color     = kwargs.get('color', None           ) # color of new merged sample
+  LOG.verbose("join: merging '%s' into %r"%("', '".join(searchterms),name),verbosity,level=1)
+  
+  # GET samples containing names and searchterm
+  mergelist = [s for s in samplelist if s.match(*searchterms,incl=False)]
+  if len(mergelist)<=1:
+    LOG.warning("Could not merge %r: fewer than two %r samples (%d)"%(name,name,len(mergelist)))
+    return samplelist
+  padding = max([len(s.name) for s in mergelist])+2 # number of spaces
+  
+  # ADD samples with name and searchterm
+  mergedsample = MergedSample(name,title,color=color)
+  for sample in mergelist:
+    samplestr = repr(sample.name).ljust(padding)
+    LOG.verbose("  adding %s to %r (%s)"%(samplestr,name,sample.fnameshort),verbosity,level=2)
+    mergedsample.add(sample)
+  
+  # REPLACE matched samples with merged sample in samplelist, preserving the order
+  if mergedsample.samples and samplelist:
+    if isinstance(samplelist,SampleSet):
+      samplelist.replace(mergedsample)
+    else:
+      oldindex = len(samplelist)
+      for sample in mergedsample.samples:
+        index = samplelist.index(sample)
+        if index<oldindex:
+          oldindex = index
+        samplelist.remove(sample)
+      samplelist.insert(index,mergedsample)
+  return samplelist
+  
+
+def stitch(samplelist,*searchterms,**kwargs):
+  """Stitching samples: merge samples and reweight inclusive
+  sample and rescale jet-binned samples, e.g. DY*Jets or W*Jets."""
+  verbosity = LOG.getverbosity(kwargs,1)
+  name      = kwargs.get('name',    searchterms[0] )
+  name_incl = kwargs.get('incl',    searchterms[0] ) # name of inclusive sample
+  xsec_incl = kwargs.get('xsec',    None           ) # (N)NLO cross section to compute k-factor
+  kfactor   = kwargs.get('kfactor', None           ) # k-factor
+  npartvar  = kwargs.get('npart',   'NUP'          ) # variable name of number of partons
+  LOG.verbose("stitch: rescale, reweight and merge %r samples"%(name),verbosity,level=1)
+  
+  # GET list samples to-be-stitched
+  stitchlist = samplelist.samples if isinstance(samplelist,SampleSet) else samplelist
+  stitchlist = [s for s in stitchlist if s.match(*searchterms,incl=True)]
+  if len(stitchlist)<2:
+    LOG.warning("stitch: Could not stitch %r: fewer than two %s samples (%d) match '%s'"%(
+                 name,name,len(stitchlist),"', '".join(searchterms)))
+    for s in stitchlist:
+      print ">>>   %s"%s.name
+    if len(stitchlist)==0:
+      return samplelist
+  name  = kwargs.get('name',stitchlist[0].name)
+  title = kwargs.get('title',stitchlist[0].title)
+  
+  # FIND inclusive sample
+  sample_incls = [s for s in stitchlist if s.match(name_incl)]
+  if len(sample_incls)==0:
+    LOG.warning('stitch: Could not find inclusive sample "%s"! Just joining...'%(name))
+    return join(samplelist,*searchterms,**kwargs)
+  elif len(sample_incls)>1:
+    LOG.warning("stitch: Found more than one inclusive sample %r with '%s' searchterms: %s"%(
+                name,"', '".join(searchterms),sample_incls))
+  
+  # (N)NLO/LO k-factor
+  sample_incl     = sample_incls[0]
+  nevts_incl      = sample_incl.sumweights
+  xsec_incl_LO    = sample_incl.xsec
+  if kfactor:
+    xsec_incl_NLO = kfactor*xsec_incl_LO
+  else:
+    xsec_incl_NLO = xsec_incl or getxsec_nlo(name,*searchterms) or xsec_incl_LO
+    kfactor       = xsec_incl_NLO / xsec_incl_LO
+  LOG.verbose("  %s k-factor = %.2f = %.2f / %.2f"%(name,kfactor,xsec_incl_NLO,xsec_incl_LO),verbosity,level=2)
+  
+  # GET effective number of events per jet bin
+  # assume first sample in the list is the inclusive sample
+  neffs     = [ ]
+  if verbosity>=2:
+    print ">>>   Get effective number of events per jet bin:"
+    LOG.ul("%-18s %12s = %12s + %12s * %7s / %10s"%('name','neff','nevts','nevts_incl','xsec','xsec_incl_LO'),pre="    ")
+  for sample in stitchlist:
+    nevts = sample.sumweights
+    neff  = nevts
+    xsec  = sample.xsec # LO inclusive or jet-binned cross section
+    if sample==sample_incl: #.match(name_incl):
+      LOG.verbose("%-18s %12.2f = %12.2f"%(sample.name,neff,nevts),verbosity,2,pre="    ")
+    else:
+      neff = nevts + nevts_incl*xsec/xsec_incl_LO # effective number of events, no k-factor to preserve npart distribution
+      LOG.verbose("%-18s %12.2f = %12.2f + %12.2f * %7.2f / %10.2f"%(sample.name,neff,nevts,nevts_incl,xsec,xsec_incl_LO),verbosity,2,pre="    ")
+    neffs.append(neff)
+  
+  # SET normalization with effective luminosity
+  weights   = [ ]
+  norm_incl = -1
+  npart_max = -1
+  if verbosity>=2:
+    print ">>>   Get lumi-xsec normalization:"
+    LOG.ul('%-18s %5s %9s = %9s * %7s * %8s * 1000 / %8s'%('name','npart','norm','lumi','kfactor','xsec','neff'),pre="    ")
+  for sample, neff in zip(stitchlist,neffs):
+    if sample==sample_incl: #.match(name_incl):
+      npart = 0
+    else:
+      matches = re.findall("(\d+)Jets",sample.fnameshort)      
+      if len(matches)==0:
+        LOG.throw(IOError,'stitch: Could not stitch %r: no "\\d+Jets" pattern found in %r!'%(name,sample.name))
+      elif len(matches)>1:
+        LOG.warning('stitch: More than one "\\d+Jets" match found in %r! matches = %s'%(sample.name,matches))
+      npart = int(matches[0])
+    xsec = sample.xsec # LO inclusive or jet-binned xsec
+    norm = sample.lumi * kfactor * xsec * 1000 / neff
+    if npart==0:
+      norm_incl = norm # new normalization of inclusive sample (with k-factor included)
+    if npart>npart_max:
+      npart_max = npart
+    weights.append("(NUP==%d?%.6g:1)"%(npart,norm))
+    LOG.verbose('%-18s %5d %9.4f = %9.2f * %7.3f * %8.2f * 1000 / %8.2f'%(sample.name,npart,norm,sample.lumi,kfactor,xsec,neff),verbosity,2,pre="    ")
+    if sample==sample_incl and len(stitchlist)>1: #.match(name_incl):
+      sample.norm = 1.0 # apply lumi-xsec normalization via weights instead of Sample.norm attribute
+    else:
+      sample.norm = norm # apply lumi-xsec normalization
+  if len(stitchlist)==1:
+    return samplelist # only k-factor was applied to lumi-xsec normalization
+  
+  # ADD weights for NUP > npart_max
+  if norm_incl>0 and npart_max>0:
+    weights.append("(NUP>%d?%.6g:1)"%(npart_max,norm_incl))
+  else:
+    LOG.warning("   found no weight for %s==0 (%.1f) or no maximum %s (%d)..."%(npartvar,norm_incl,npartvar,npart_max))
+  
+  # SET stich weight of inclusive sample
+  stitchweights = '*'.join(weights)
+  if npartvar!='NUP':
+    stitchweights = stitchweights.replace('NUP',npartvar)
+  LOG.verbose("  Inclusive stitch weight:\n>>>     %r"%(stitchweights),verbosity,2)
+  sample_incl.addweight(stitchweights)
+  if not title:
+    title = sample_incl.title
+  
+  # JOIN
+  join(samplelist,*searchterms,name=name,title=title,verbosity=verbosity)
+  return samplelist
+  
+
+def getxsec_nlo(*searchterms,**kwargs):
+  """Returns inclusive (N)NLO cross section for stitching og DY and WJ."""
+  # https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV#List_of_processes
+  # https://ineuteli.web.cern.ch/ineuteli/crosssections/2017/FEWZ/
+  # DY cross sections  5765.4 [  4954.0, 1012.5,  332.8, 101.8,  54.8 ]
+  # WJ cross sections 61526.7 [ 50380.0, 9644.5, 3144.5, 954.8, 485.6 ]
+  xsec_nlo = 0
+  for searchterm in searchterms:
+    if 'DY' in searchterm:
+      if any('10to50' in s for s in searchterms):
+        xsec_nlo = xsecs_nlo['DYJetsToLL_M-10to50']
+        break
+      else:
+        xsec_nlo = xsecs_nlo['DYJetsToLL_M-50']
+        break
+    elif 'WJ' in searchterm:
+      xsec_nlo = xsecs_nlo['WJetsToLNu']
+      break
+  else:
+    LOG.warning("getxsec_nlo: Did not find a DY or WJ match in '%s'!"%("', '".join(searchterms)))
+  return xsec_nlo
   
 
 from TauFW.Plotter.sample.Sample import *

@@ -2,9 +2,8 @@
 # Author: Izaak Neutelings (July 2020)
 import os, re
 from TauFW.Plotter.sample.utils import *
-from TauFW.Plotter.plot.strings import *
+from TauFW.Plotter.plot.string import *
 from TauFW.Plotter.plot.utils import deletehist, printhist, round2digit
-from TauFW.Plotter.plot.Variable import Variable
 from TauFW.Plotter.sample.SampleStyle import *
 from TauFW.Plotter.plot.MultiDraw import MultiDraw
 from ROOT import TTree
@@ -36,8 +35,8 @@ class Sample(object):
     self.nevents      = kwargs.get('nevts',        -1           ) # "raw" number of events
     self.nexpevts     = kwargs.get('nexp',         -1           ) # number of events you expect to be processed for check for missing events
     self.sumweights   = kwargs.get('sumw',         self.nevents ) # sum weights
-    self.binnevts     = kwargs.get('binnevts',      1           ) # cutflow bin with total number of (unweighted) events
-    self.binsumw      = kwargs.get('binsumw',      15           ) # cutflow bin with total sum of weight
+    self.binnevts     = kwargs.get('binnevts',     None         ) or 1  # cutflow bin with total number of (unweighted) events
+    self.binsumw      = kwargs.get('binsumw',      None         ) or 17 # cutflow bin with total sum of weight
     self.lumi         = kwargs.get('lumi',         GLOB.lumi    ) # integrated luminosity
     self.norm         = kwargs.get('norm',         1.0          ) # lumi*xsec/binsumw normalization
     self.scale        = kwargs.get('scale',        1.0          ) # scales factor (e.g. for W+Jets renormalization)
@@ -52,8 +51,9 @@ class Sample(object):
     self.isembed      = kwargs.get('embed',        False        ) # flag for embedded sample
     self.isexp        = kwargs.get('exp',          self.isembed ) or not (self.isdata or self.issignal) # background MC (expected SM process)
     self.blinddict    = kwargs.get('blind',        { }          ) # blind data in some given range, e.g. blind={xvar:(xmin,xmax)}
-    self.fillcolor    = kwargs.get('color',        None         ) or self.setcolor() # fill color
+    self.fillcolor    = kwargs.get('color',        None         ) or kBlack if self.isdata else self.setcolor() # fill color
     self.linecolor    = kwargs.get('lcolor',       kBlack       ) # line color
+    self.tags         = kwargs.get('tags',         [ ]          ) # extra tags to be used for matching of search terms
     if not isinstance(self,MergedSample):
       file = ensureTFile(self.filename) # check file
       file.Close()
@@ -73,18 +73,23 @@ class Sample(object):
     return '<%s(%r,%r) at %s>'%(self.__class__.__name__,self.name,self.title,hex(id(self)))
   
   @staticmethod
-  def printheader():
-    print ">>> \033[4m%-21s %-26s %12s %11s %11s %10s  %s\033[0m"%(
-               "Sample name","title","xsec [pb]","nevents","sumweights","norm","weight"+' '*8)
+  def printheader(title=None,justname=25,justtitle=25):
+    if title!=None:
+      print ">>> %s"%(title)
+    name  = "Sample name".ljust(justname)
+    title = "title".ljust(justtitle)
+    print ">>> \033[4m%s %s %12s %12s %13s %9s  %s\033[0m"%(
+               name,title,"xsec [pb]","nevents","sumweights","norm","weight"+' '*8)
   
   def printrow(self,**kwargs):
     print self.row(**kwargs)
   
-  def row(self,pre="",indent=0):
+  def row(self,pre="",indent=0,justname=25,justtitle=25):
     """Returns string that can be used as a row in a samples summary table"""
-    name = self.name.ljust(21-indent)
-    return ">>> %s%s %-26s %12s %11s %11s %10.3s  %s"%(
-            pre,name,self.title,self.xsec,self.nevents,self.sumweights,self.norm,self.extraweight)
+    name  = self.name.ljust(justname-indent)
+    title = self.title.ljust(justtitle)
+    return ">>> %s%s %s %12.2f %12.1f %13.2f %9.3f  %s"%(
+            pre,name,title,self.xsec,self.nevents,self.sumweights,self.norm,self.extraweight)
   
   def printobjs(self,title=""):
     """Print all sample objects recursively."""
@@ -97,6 +102,10 @@ class Sample(object):
       for sample in self.splitsamples:
         sample.printobjs(title+"    ")
   
+  def getmaxnamelen(self,indent=0):
+    """Help function for SampleSet.printtable to make automatic columns."""
+    return indent+len(self.name)
+  
   @property
   def file(self):
     return self.getfile()
@@ -107,10 +116,10 @@ class Sample(object):
   
   def getfile(self,refresh=False):
     if not self._file:
-      LOG.verb("Sample.getfile: Opening file %s..."%(self.filename),level=2)
+      LOG.verb("Sample.getfile: Opening file %s..."%(self.filename),level=3)
       self._file = ensureTFile(self.filename)
     elif refresh:
-      LOG.verb("Sample.getfile: Closing and opening file %s..."%(self.filename),level=2)
+      LOG.verb("Sample.getfile: Closing and opening file %s..."%(self.filename),level=3)
       self._file.Close()
       self._file = ensureTFile(self.filename)
     return self._file
@@ -126,12 +135,12 @@ class Sample(object):
   @property
   def tree(self):
     if not self.file:
-      LOG.verb("Sample.tree: Opening file %s to get tree %r..."%(self.filename,self.treename),level=2)
+      LOG.verb("Sample.tree: Opening file %s to get tree %r..."%(self.filename,self.treename),level=3)
       self._tree = self.file.Get(self.treename)
     elif self._tree and isinstance(self._tree,TTree):
-      LOG.verb("Sample.tree: Getting existing tree %s..."%(self._tree),level=2)
+      LOG.verb("Sample.tree: Getting existing tree %s..."%(self._tree),level=3)
     else:
-      LOG.verb("Sample.tree: No valid tree (%s). Retrieving tree %r from file %s..."%(self._tree,self.treename,self.filename),level=2)
+      LOG.verb("Sample.tree: No valid tree (%s). Retrieving tree %r from file %s..."%(self._tree,self.treename,self.filename),level=3)
       self._tree = self.file.Get(self.treename)
     return self._tree
   
@@ -156,7 +165,7 @@ class Sample(object):
   def clone(self,name=None,title=None,filename=None,**kwargs):
     """Shallow copy."""
     if name==None:
-      name = self.name  + ("" if samename else  "_clone" )
+      name = self.name + ("" if samename else  "_clone" )
     if title==None:
       title = self.title
     if filename==None:
@@ -167,15 +176,20 @@ class Sample(object):
     splitsamples            = [s.clone(samename=samename,deep=deep) for s in self.splitsamples] if deep else self.splitsamples[:]
     kwargs['isdata']        = self.isdata
     kwargs['isembed']       = self.isembed
-    newsample               = type(self)(name,title,filename,**kwargs)
     newdict                 = self.__dict__.copy()
     newdict['name']         = name
     newdict['title']        = title
     newdict['splitsamples'] = splitsamples
+    newdict['cuts']         = kwargs.get('cuts',   self.cuts      )
+    newdict['weight']       = kwargs.get('weight', self.weight    )
+    newdict['extraweight']  = kwargs.get('extraweight', self.extraweight )
+    newdict['fillcolor']    = kwargs.get('color',  self.fillcolor )
     if deep and self.file: # force new, separate file
       newdict['file'] = None #ensureTFile(self.file.GetName())
+    newsample               = type(self)(name,title,filename,**kwargs)
     newsample.__dict__.update(newdict)
-    #LOG.verb('Sample.clone: %r, weight = %r'%(newsample.name,newsample.weight),1)
+    LOG.verb('Sample.clone: name=%r, title=%r, color=%s, cuts=%r, weight=%r'%(
+             newsample.name,newsample.title,newsample.fillcolor,newsample.cuts,newsample.weight),1)
     if close:
       newsample.close()
     return newsample
@@ -302,9 +316,16 @@ class Sample(object):
         LOG.throw(IOError,"Could not find cutflow histogram %r in %s!"%(cutflow,self.filename))
     self.nevents    = cfhist.GetBinContent(binnevts)
     self.sumweights = cfhist.GetBinContent(binsumw)
+    if self.nevents<=0:
+      LOG.warning("Sample.setnevents: Bin %d of %r to retrieve nevents is %s<=0!"
+                  "In initialization, please specify the keyword 'binnevts' to select the right bin, or directly set the number of events with 'nevts'."%(binnevts,self.nevents,cutflow))
+    if self.sumweights<=0:
+      LOG.warning("Sample.setnevents: Bin %d of %r to retrieve sumweights is %s<=0!"
+                  "In initialization, please specify the keyword 'binsumw' to select the right bin, or directly set the number of events with 'sumw'."%(binsumw,self.sumweights,cutflow))
+      self.sumweights = self.nevents
     file.Close()
     if 0<self.nevents<self.nexpevts*0.97: # check for missing events
-       LOG.warning('Sample: Sample %r has significantly fewer events (%d) than expected (%d).'%(self.name,self.nevents,self.nexpevts))
+      LOG.warning('Sample.setnevents: Sample %r has significantly fewer events (%d) than expected (%d).'%(self.name,self.nevents,self.nexpevts))
     return self.nevents
   
   def normalize(self,lumi=None,xsec=None,sumw=None,**kwargs):
@@ -372,9 +393,9 @@ class Sample(object):
       for sample in self.samples:
         sample.addweight(weight)
     else:
-      LOG.verb('Sample.addweight: before: %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('Sample.addweight: before: %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
       self.weight = joinweights(self.weight, weight)
-      LOG.verb('                  after:  %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('                  after:  %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
     for sample in self.splitsamples:
         sample.addweight(weight)
   
@@ -384,9 +405,9 @@ class Sample(object):
       for sample in self.samples:
         sample.addextraweight(weight)
     else:
-      LOG.verb('Sample.addextraweight: before: %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('Sample.addextraweight: before: %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
       self.extraweight = joinweights(self.extraweight, weight)
-      LOG.verb('                       after:  %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('                       after:  %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
     for sample in self.splitsamples:
       sample.addextraweight(weight)
   
@@ -396,9 +417,9 @@ class Sample(object):
       for sample in self.samples:
         sample.setweight(weight)
     else:
-      LOG.verb('Sample.setweight: before: %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('Sample.setweight: before: %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
       self.weight = weight
-      LOG.verb('                  after:  %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('                  after:  %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
     for sample in self.splitsamples:
         sample.setweight(weight)
   
@@ -408,9 +429,9 @@ class Sample(object):
       for sample in self.samples:
         sample.setextraweight(weight)
     else:
-      LOG.verb('Sample.setextraweight: before: %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('Sample.setextraweight: before: %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
       self.extraweight = weight
-      LOG.verb('                       after:  %s, self.weight = %r, self.extraweight = %r'%(self,self.weight,self.extraweight),level=2)
+      LOG.verb('                       after:  %s, weight=%r, extraweight=%r'%(self,self.weight,self.extraweight),level=3)
     for sample in self.splitsamples:
         sample.setextraweight(weight)
   
@@ -435,18 +456,21 @@ class Sample(object):
                    ('ZJ', "Fake tau","genmatch_2!=5"))
     """
     verbosity      = LOG.getverbosity(kwargs)
+    color_dict     = kwargs.get('colors', { }) # dictionary with colors
     splitlist      = unwraplistargs(splitlist)
     splitsamples   = [ ]
-    for i, info in enumerate(reversed(splitlist)): #split_dict.items()
+    for i, info in enumerate(splitlist): #split_dict.items()
       name  = "%s_split%d"%(self.name,i)
       if len(info)>=3:
         name, title, cut = info[:3]
       elif len(info)==2:
         name, cut = info[0], info[1]
         title = sample_titles.get(name,name) # from SampleStyle
-      sample       = self.clone(name,title)
-      sample.cuts  = joincuts(self.cuts,cut)
-      sample.color = getcolor(sample)
+      cuts   = joincuts(self.cuts,cut)
+      color  = color_dict.get(name,getcolor(name))
+      sample = self.clone(name,title,cuts=cuts,color=color) # make clone of self
+      #LOG.verb('Sample.clone: name=%r, title=%r, color=%s, cuts=%r, weight=%r'%(
+      #         newsample.name,newsample.title,newsample.fillcolor,newsample.cuts,newsample.weight),1)
       splitsamples.append(sample)
     self.splitsamples = splitsamples # save list of split samples
     return splitsamples
@@ -459,7 +483,7 @@ class Sample(object):
     name       = kwargs.get('name',     self.name      ) # hist name
     name      += kwargs.get('tag',      ""             ) # tag for hist name
     title      = kwargs.get('title',    self.title     ) # hist title
-    blind      = kwargs.get('blind',    None           ) # blind data in some given range, e.g. blind={xvar:(xmin,xmax)}
+    blind      = kwargs.get('blind',    self.isdata    ) # blind data in some given range, e.g. blind={xvar:(xmin,xmax)}
     fcolor     = kwargs.get('color',    self.fillcolor ) # fill color
     lcolor     = kwargs.get('lcolor',   self.linecolor ) # line color
     #replaceweight = kwargs.get('replaceweight', None )
@@ -478,10 +502,10 @@ class Sample(object):
     #  if len(replaceweight)==2 and not isList(replaceweight[0]):
     #    replaceweight = [replaceweight]
     #  for pattern, substitution in replaceweight:
-    #    LOG.verb('Sample.gethist: replacing weight: before %r'%weight,verbosity,2)
+    #    LOG.verb('Sample.gethist: replacing weight: before %r'%weight,verbosity,3)
     #    weight = re.sub(pattern,substitution,weight)
     #    weight = weight.replace("**","*").strip('*')
-    #    LOG.verb('Sample.gethist: replacing weight: after  %r'%weight,verbosity,2)
+    #    LOG.verb('Sample.gethist: replacing weight: after  %r'%weight,verbosity,3)
     cuts = joincuts(cuts,weight=weight)
     
     # PREPARE HISTOGRAMS
@@ -492,16 +516,16 @@ class Sample(object):
       # VAREXP
       hname  = makehistname(variable.filename,name)
       varcut = ""
-      if self.isdata and (blind or variable.blindcuts or variable.cut or variable.weightdata):
+      if self.isdata and (blind or variable.blindcuts or variable.cut or variable.dataweight):
         blindcuts = ""
         if blind:
           if isinstance(blind,tuple) and len(blind)==2:
             blindcuts = variable.blind(*blind)
           elif variable.name_ in self.blinddict:
             blindcuts = variable.blind(*self.blinddict[variable.name_])
-        elif variable.blindcuts:
-          blindcuts = variable.blindcuts
-        varcut = joincuts(blindcuts,variable.cut,weight=variable.weightdata)
+          elif variable.blindcuts:
+            blindcuts = variable.blindcuts
+        varcut = joincuts(blindcuts,variable.cut,weight=variable.dataweight)
       elif not self.isdata and (variable.cut or variable.weight):
         varcut = joincuts(variable.cut,weight=variable.weight)
       if varcut:
@@ -522,6 +546,8 @@ class Sample(object):
       file, tree = self.get_newfile_and_tree() # create new file and tree for thread safety
       out = tree.MultiDraw(varexps,cuts,drawopt,hists=hists)
       file.Close()
+      LOG.insist(len(variables)==len(varexps)==len(hists),
+                 "Number of variables (%d), variable expressions (%d) and histograms (%d) must be equal!"%(len(variables),len(varexps),len(hists)))
     
     # FINISH
     nentries = 0
@@ -529,7 +555,6 @@ class Sample(object):
     for variable, hist in zip(variables,hists):
       if scale!=1.0:   hist.Scale(scale)
       if scale==0.0:   LOG.warning("Scale of %s is 0!"%self.name)
-      if verbosity>=3: printhist(hist)
       hist.SetLineColor(lcolor)
       hist.SetFillColor(kWhite if self.isdata or self.issignal else fcolor)
       hist.SetMarkerColor(lcolor)
@@ -538,15 +563,18 @@ class Sample(object):
         integral = hist.Integral()
     
     # PRINT
-    if verbosity>=2:
+    if verbosity>=3:
       print ">>>\n>>> Sample.gethist: %s, %s"%(color(self.name,color="grey"),self.fnameshort)
       print ">>>   entries: %d (%.2f integral)"%(nentries,integral)
       print ">>>   scale: %.6g (scale=%.6g, norm=%.6g)"%(scale,self.scale,self.norm)
       print ">>>   %r"%(cuts)
-      if verbosity>=3:
-        for var, varexp in zip(variables,varexps):
-          print '>>>   Variable %r: varexp=%r'%(var.name,varexp)
+      if verbosity>=4:
+        for var, varexp, hist in zip(variables,varexps,hists):
+          print '>>>   Variable %r: varexp=%r, entries=%d, integral=%d'%(var.name,varexp,hist.GetEntries(),hist.Integral())
           #print '>>>   Variable %r: cut=%r, weight=%r, varexp=%r'%(var.name,var.cut,var.weight,varexp)
+          if verbosity>=5:
+            printhist(hist,pre=">>>   ")
+      
     
     if issingle:
       return hists[0]
@@ -554,7 +582,7 @@ class Sample(object):
   
   def gethist2D(self, *args, **kwargs):
     """Create and fill a 2D histogram from a tree."""
-    variables, selection, issingle = unwrap_gethist_args_2D(*args)
+    variables, selection, issingle = unwrap_gethist2D_args(*args)
     verbosity = LOG.getverbosity(kwargs)
     scale     = kwargs.get('scale',         1.0        ) * self.scale * self.norm
     name      = kwargs.get('name',          self.name  )
@@ -598,6 +626,8 @@ class Sample(object):
     file, tree = self.get_newfile_and_tree() # create new file and tree for thread safety
     out = tree.MultiDraw(varexps,cuts,drawopt,hists=hists)
     file.Close()
+    LOG.insist(len(variables)==len(varexps)==len(hists),
+               "Number of variables (%d), variable expressions (%d) and histograms (%d) must be equal!"%(len(variables),len(varexps),len(hists)))
     
     # FINISH
     nentries = 0
@@ -605,7 +635,6 @@ class Sample(object):
     for variable, hist in zip(variables,hists):
       if scale!=1.0:   hist.Scale(scale)
       if scale==0.0:   LOG.warning("Scale of %s is 0!"%self.name)
-      if verbosity>=3: printhist(hist)
       if hist.GetEntries()>nentries:
         nentries = hist.GetEntries()
         integral = hist.Integral()
@@ -616,6 +645,12 @@ class Sample(object):
       print ">>>   scale: %.6g (scale=%.6g, norm=%.6g)"%(scale,self.scale,self.norm)
       print ">>>   entries: %d (%.2f integral)"%(nentries,integral)
       print ">>>   %s"%cuts
+      if verbosity>=4:
+        for var, varexp, hist in zip(variables,varexps,hists):
+          print '>>>   Variables (%r,%r): varexp=%r, entries=%d, integral=%d'%(var[0].name,var[1].name,varexp,hist.GetEntries(),hist.Integral())
+          #print '>>>   Variable %r: cut=%r, weight=%r, varexp=%r'%(var.name,var.cut,var.weight,varexp)
+          if verbosity>=5:
+            printhist(hist,pre=">>>   ")
     
     if issingle:
       return hists[0]
@@ -628,7 +663,7 @@ class Sample(object):
       return False
     found  = True
     regex  = kwargs.get('regex', False   ) # use regexpr patterns
-    excl   = kwargs.get('excl',  True    ) # match only one term
+    incl   = kwargs.get('incl',  True    ) # match only one term
     start  = kwargs.get('start', False   ) # match only beginning
     labels = [self.name,self.title]+self.tags
     for searchterm in terms:
@@ -637,30 +672,30 @@ class Sample(object):
         searchterm = re.sub(r"([^\.])\*",r"\1.*",searchterm) # replace * with .*
       if start:
         searchterm = '^'+searchterm
-      if excl:
+      if incl: # inclusive: match only one search term
         for label in labels:
           matches = re.findall(searchterm,label)
           if matches:
             break
         else:
-          return False # none of the labels contain the searchterm
-      else: # inclusive
+          return False # none of the labels matched to the searchterm
+      else: # exclusive: match all search terms
         for label in labels:
           matches = re.findall(searchterm,label)
           if matches:
-            return True # one of the searchterm has been found
-    return exclusive
+            return True # one of the search term has been matched
+    return incl # if incl==True, at least one search terms was matched
   
 
 def Data(*args,**kwargs):
-  kwargs['isdata'] = True
-  kwargs['isexp']  = False
+  kwargs['data'] = True
+  kwargs['exp']  = False
   return Sample(*args,**kwargs)
   
 
 def MC(*args,**kwargs):
-  kwargs['isdata'] = False
-  kwargs['isexp']  = True
+  kwargs['data'] = False
+  kwargs['exp']  = True
   return Sample(*args,**kwargs)
   
 

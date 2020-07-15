@@ -10,13 +10,12 @@ from TauFW.common.tools.file import ensuredir, ensurefile, ensureinit, getline
 from TauFW.common.tools.utils import execute, chunkify, repkey
 from TauFW.common.tools.log import Logger, color, bold
 from TauFW.PicoProducer.analysis.utils import getmodule, ensuremodule
-from TauFW.PicoProducer.batch.utils import getbatch, getsamples, getcfgsamples
-from TauFW.PicoProducer.storage.utils import getstorage
+from TauFW.PicoProducer.batch.utils import getbatch, getcfgsamples
+from TauFW.PicoProducer.storage.utils import getstorage, getsamples
 from argparse import ArgumentParser
 os.chdir(GLOB.basedir)
 CONFIG = GLOB.getconfig(verb=0)
 LOG    = Logger()
-
 
 
 ###############
@@ -75,10 +74,10 @@ def main_get(args):
     print ">>> main_get", args
   variable  = args.variable
   eras      = args.eras
+  channels  = args.channels or [""]
   dtypes    = args.dtypes
   filters   = args.samples
   vetoes    = args.vetoes
-  channels  = args.channels or [""]
   checkdas  = args.checkdas
   writedir  = args.write # write sample file list to text file
   tag       = args.tag
@@ -87,18 +86,42 @@ def main_get(args):
   if verbosity>=1:
     print '-'*80
     print ">>> %-14s = %s"%('variable',variable)
+    print ">>> %-14s = %s"%('eras',eras)
+    print ">>> %-14s = %s"%('channels',channels)
     print ">>> %-14s = %s"%('cfgname',cfgname)
     print ">>> %-14s = %s"%('config',CONFIG)
     print '-'*80
   
-  # SAMPLES
-  if variable=='files':
+  # LIST SAMPLES
+  if variable=='samples':
+    if not eras:
+      LOG.warning("Please specify an era to get a sample for.")
+    for era in eras:
+      for channel in channels:
+        if channel:
+          print ">>> Getting file list for era %r, channel %r"%(era,channel)
+        else:
+          print ">>> Getting file list for era %r"%(era)
+        samples = getsamples(era,channel=channel,dtype=dtypes,filter=filters,veto=vetoes,verb=verbosity)
+        if not samples:
+          LOG.warning("No samples found for era %r."%(era))
+        for sample in samples:
+          print ">>> %s"%(bold(sample.name))
+          for path in sample.paths:
+            print ">>>   %s"%(path)
+  
+  # LIST SAMPLE FILES
+  elif variable=='files':
     
     # LOOP over ERAS & CHANNELS
     if not eras:
       LOG.warning("Please specify an era to get a sample for.")
     for era in eras:
       for channel in channels:
+        if channel:
+          print ">>> Getting file list for era %r, channel %r"%(era,channel)
+        else:
+          print ">>> Getting file list for era %r"%(era)
         
         # VERBOSE
         if verbosity>=1:
@@ -303,7 +326,9 @@ def main_run(args):
   
   # LOOP over ERAS
   if not eras:
-    print ">>> Please specify a valid era (-y) and a channel (-c)."
+    print ">>> Please specify a valid era (-y)."
+  if not channels:
+    print ">>> Please specify a valid channel (-c)."
   for era in eras:
     moddict = { } # save time by loading samples and get their files only once
     
@@ -532,7 +557,7 @@ def preparejobs(args):
         jobids     = sample.jobcfg.get('jobids',[ ])
         dtype      = sample.dtype
         postfix    = "_%s%s"%(channel,tag)
-        jobtag     = '_%s_try%d'%(postfix,subtry)
+        jobtag     = '%s_try%d'%(postfix,subtry)
         jobname    = sample.name+jobtag.rstrip('try1').rstrip('_')
         extraopts_ = extraopts[:]
         if sample.extraopts:
@@ -1011,18 +1036,22 @@ def main_submit(args):
       print ">>>   Nothing to %ssubmit!"%('re' if resubmit else '')
       continue
     if batch.system=='HTCondor':
-      script  = "python/batch/submit_HTCondor.sub"
+      # use specific settings for KIT condor
+      if 'etp' in GLOB._host:
+        script = "python/batch/submit_HTCondor_KIT.sub"
+      else:
+        script = "python/batch/submit_HTCondor.sub"
       appcmds = ["initialdir=%s"%(jobdir),
                  "mylogfile='log/%s.$(ClusterId).$(ProcId).log'"%(jobname)]
       if testrun and not queue:
         queue = "espresso"
       qcmd    = "arg from %s"%(joblist)
-      jkwargs.update({'app': appcmds, 'qcmd': qcmd })
+      jkwargs.update({'queue':queue, 'app': appcmds, 'qcmd': qcmd })
       #jobid   = batch.submit(script,name=jobname,app=appcmds,qcmd=qcmd,opt=batchopts,queue=queue,dry=dryrun)
     elif batch.system=='SLURM':
       script  = "python/batch/submit_SLURM.sh %s"%(joblist)
       logfile = os.path.join(logdir,"%x.%A.%a") # $JOBNAME.o$JOBID.$TASKID
-      jkwargs.update({'queue':queue, 'log': logfile, 'array': nchunks })
+      jkwargs.update({'log': logfile, 'array': nchunks })
       #jobid   = batch.submit(script,name=jobname,log=logfile,array=nchunks,opt=batchopts,queue=queue,dry=dryrun)
     #elif batch.system=='SGE':
     #elif batch.system=='CRAB':
@@ -1050,7 +1079,6 @@ def main_submit(args):
           print ">>> '%s' is not a valid answer, please choose y/n."%submit
     else:
       jobid = batch.submit(script,**jkwargs)
-    print
     
     # WRITE JOBCONFIG
     if jobid!=None:
@@ -1138,9 +1166,9 @@ def main_status(args):
                                            DAS=sample.paths[0].strip('/'),GROUP=sample.group)
           storage  = getstorage(storedir,ensure=True,verb=verbosity)
           outfile  = '%s_%s%s.root'%(sample.name,channel,tag)
-          infiles  = os.path.join(outdir,'*_%s_[0-9]*.root'%(postfix))
-          cfgfiles = os.path.join(sample.jobcfg['cfgdir'],'job*_%s_try[0-9]*.*'%(postfix))
-          logfiles = os.path.join(sample.jobcfg['logdir'],'*_%s_try[0-9]*.*.*.log'%(postfix))
+          infiles  = os.path.join(outdir,'*%s_[0-9]*.root'%(postfix))
+          cfgfiles = os.path.join(sample.jobcfg['cfgdir'],'job*%s_try[0-9]*.*'%(postfix))
+          logfiles = os.path.join(sample.jobcfg['logdir'],'*%s_try[0-9]*.*.*.log'%(postfix))
           if verbosity>=1:
             print ">>> Hadd'ing job output for '%s'"%(sample.name)
             print ">>> %-12s = %r"%('jobdir',jobdir)
@@ -1152,7 +1180,7 @@ def main_status(args):
                                                checkqueue=checkqueue,das=checkdas,verb=verbosity)
           if len(resubfiles)>0 and not force:
             LOG.warning("Cannot hadd job output because %d chunks need to be resubmitted..."%(len(resubfiles))+
-                        "Please use -f or --force to hadd anyway.")
+                        "Please use -f or --force to hadd anyway.\n")
             continue
           #haddcmd = 'hadd -f %s %s'%(outfile,infiles)
           #haddout = execute(haddcmd,dry=dryrun,verb=max(1,verbosity))
@@ -1176,10 +1204,14 @@ def main_status(args):
         
         # ONLY CHECK STATUS
         else:
+          jobdir   = sample.jobcfg['jobdir']
           outdir   = sample.jobcfg['outdir']
+          logdir   = sample.jobcfg['logdir']
           if verbosity>=1:
-            print ">>> Checking job status for '%s'"%(sample.name) 
+            print ">>> Checking job status for '%s'"%(sample.name)
+            print ">>> %-12s = %r"%('jobdir',jobdir)
             print ">>> %-12s = %r"%('outdir',outdir)
+            print ">>> %-12s = %r"%('logdir',logdir)
           checkchuncks(sample,channel=channel,tag=tag,jobs=jobs,
                        checkqueue=checkqueue,das=checkdas,verb=verbosity)
         

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Author: Izaak Neutelings (July 2020)
 from TauFW.Plotter.sample.Sample import *
+from TauFW.Plotter.plot.MultiThread import MultiProcessor
 
 
 class MergedSample(Sample):
@@ -44,19 +45,27 @@ class MergedSample(Sample):
       self.init(sample)
     self.samples.append(sample)
   
-  def row(self,pre="",indent=0):
+  def row(self,pre="",indent=0,justname=25,justtitle=25):
     """Returns string that can be used as a row in a samples summary table."""
     xsec   = "%.2f"%self.xsec if self.xsec>0 else ""
-    nevts  = "%i"%self.nevents if self.nevents>=0 else ""
-    sumw   = "%i"%self.sumweights if self.sumweights>=0 else ""
+    nevts  = "%.1f"%self.nevents if self.nevents>=0 else ""
+    sumw   = "%.2f"%self.sumweights if self.sumweights>=0 else ""
     norm   = "%.3f"%self.norm
-    name   = self.name.ljust(21-indent)
-    string = ">>> %s%s %-26s %12s %11s %11s %10.3s  %s" %\
-             (pre,name,self.title,xsec,nevts,sumw,norm,self.extraweight)
+    name   = self.name.ljust(justname-indent)
+    title  = self.title.ljust(justtitle)
+    string = ">>> %s%s %s %12s %12s %13s %9s  %s" %\
+             (pre,name,title,xsec,nevts,sumw,norm,self.extraweight)
     for i, sample in enumerate(self.samples):
       subpre  = ' '*indent+("├─ " if i<len(self.samples)-1 else "└─ ")
-      string += "\n" + sample.row(pre=subpre,indent=indent+3)
+      string += "\n" + sample.row(pre=subpre,indent=indent+3,justname=justname,justtitle=justtitle)
     return string
+  
+  def getmaxnamelen(self,indent=0):
+    """Help function for SampleSet.printtable to make automatic columns."""
+    namelens = [len(self.name)]
+    for sample in self.samples:
+      namelens.append(indent+sample.getmaxnamelen(indent=indent+3))
+    return max(namelens)
   
   def clone(self,*args,**kwargs):
     """Shallow copy."""
@@ -85,10 +94,16 @@ class MergedSample(Sample):
     newdict['title']        = title
     newdict['samples']      = samples
     newdict['splitsamples'] = splitsamples
+    newdict['cuts']         = kwargs.get('cuts',   self.cuts      )
+    newdict['weight']       = kwargs.get('weight', self.weight    )
+    newdict['extraweight']  = kwargs.get('extraweight', self.extraweight )
+    newdict['fillcolor']    = kwargs.get('color',  self.fillcolor )
     newsample               = type(self)(name,title,*samples,**kwargs)
     newsample.__dict__.update(newdict)
     if close:
       newsample.close()
+    LOG.verb('MergedSample.clone: name=%r, title=%r, color=%s, cuts=%r, weight=%r'%(
+             newsample.name,newsample.title,newsample.fillcolor,newsample.cuts,newsample.weight),level=2)
     return newsample
   
   def gethist(self, *args, **kwargs):
@@ -112,7 +127,7 @@ class MergedSample(Sample):
       hkwargs['parallel'] = False
       processor = MultiProcessor()
       for sample in self.samples:
-        processor.start(sample.hist,hargs,hkwargs,name=sample.title)        
+        processor.start(sample.gethist,hargs,hkwargs,name=sample.title)        
       for process in processor:
         allhists.append(process.join())
     else:
@@ -124,7 +139,7 @@ class MergedSample(Sample):
     # SUM
     sumhists = [ ]
     if any(len(subhists)<len(variables) for subhists in allhists):
-      LOG.error("MergedSample.hist: len(subhists) = %s < %s = len(variables)"%(len(subhists),len(variables)))
+      LOG.error("MergedSample.gethist: len(subhists) = %s < %s = len(variables)"%(len(subhists),len(variables)))
     for ivar, variable in enumerate(variables):
       subhists = [subhists[ivar] for subhists in allhists]
       sumhist  = None
@@ -139,8 +154,8 @@ class MergedSample(Sample):
           sumhists.append(sumhist)
         else:
           sumhist.Add(subhist)      
-      if verbosity>=3:
-        printhist(sumhist)
+      if verbosity>=4:
+        printhist(sumhist,pre=">>>   ")
       deletehist(subhists)
     
     # PRINT
@@ -159,7 +174,7 @@ class MergedSample(Sample):
   
   def gethist2D(self, *args, **kwargs):
     """Create and fill 2D histgram for multiple samples. Overrides Sample.gethist2D."""
-    variables, selection, issingle = unwrap_gethist_args(*args)
+    variables, selection, issingle = unwrap_gethist2D_args(*args)
     verbosity        = LOG.getverbosity(kwargs)
     name             = kwargs.get('name',               self.name+"_merged" )
     name            += kwargs.get('tag',                ""                  )
